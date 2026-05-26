@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Information about user scores, hearts, streak, xp, and lesson progress",
+      "type": "object",
+      "properties": {
+        "hearts": { "type": "integer" },
+        "streak": { "type": "integer" },
+        "xp": { "type": "integer" },
+        "currentNodeId": { "type": "string" },
+        "currentLessonId": { "type": "string" },
+        "completedLessons": { "type": "array" },
+        "completedNodes": { "type": "array" },
+        "weeklyActivity": { "type": "array" },
+        "league": { "type": "string" },
+        "lastActiveDate": { "type": "string" }
+      },
+      "required": ["hearts", "streak", "xp", "completedLessons", "completedNodes", "weeklyActivity", "league"]
+    },
+    "CustomBook": {
+      "title": "CustomBook",
+      "description": "User uploaded textbook converted to an interactive curriculum",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "icon": { "type": "string" },
+        "description": { "type": "string" },
+        "lessons": { "type": "array" },
+        "levelCount": { "type": "integer" },
+        "requiredNodes": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "ownerId": { "type": "string" }
+      },
+      "required": ["id", "title", "icon", "description", "lessons", "levelCount", "requiredNodes", "createdAt", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProgress",
+      "description": "User profile, XP, streak, hearts and progression data"
+    },
+    "/users/{userId}/books/{bookId}": {
+      "schema": "CustomBook",
+      "description": "Interactive educational custom chapters generated from textbook PDFs"
+    }
+  }
+}

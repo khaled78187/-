@@ -1,0 +1,77 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net Default-Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation Blueprint for UserProgress
+    function isValidUserProgress(data) {
+      return data.hearts is int 
+        && data.hearts >= 0 
+        && data.hearts <= 5
+        && data.streak is int 
+        && data.streak >= 0
+        && data.xp is int 
+        && data.xp >= 0
+        && data.completedLessons is list
+        && data.completedNodes is list
+        && data.weeklyActivity is list
+        && data.league is string
+        && data.league.size() <= 64;
+    }
+
+    // Validation Blueprint for Custom uploaded educational Book
+    function isValidCustomBook(data, userId) {
+      return data.id is string
+        && data.title is string
+        && data.title.size() <= 256
+        && data.icon is string
+        && data.icon.size() <= 64
+        && data.description is string
+        && data.description.size() <= 2048
+        && data.lessons is list
+        && data.levelCount is int
+        && data.requiredNodes is list
+        && data.ownerId == userId;
+    }
+
+    // Match Rules
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserProgress(incoming());
+      allow update: if isOwner(userId) && isValidUserProgress(incoming());
+      allow delete: if isOwner(userId);
+
+      match /books/{bookId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(bookId) && isValidCustomBook(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(bookId) && isValidCustomBook(incoming(), userId);
+        allow delete: if isOwner(userId) && isValidId(bookId);
+      }
+    }
+  }
+}
