@@ -6,7 +6,13 @@ import firebaseConfig from '../../firebase-applet-config.json';
 // Initialize Firebase applet instance
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Map "default" database ID to default database initialization signature
+const dbId = !firebaseConfig.firestoreDatabaseId || firebaseConfig.firestoreDatabaseId === 'default'
+  ? undefined
+  : firebaseConfig.firestoreDatabaseId;
+
+export const db = dbId ? getFirestore(app, dbId) : getFirestore(app);
 
 // Standard Operation Enum for diagnostic tracking
 export enum OperationType {

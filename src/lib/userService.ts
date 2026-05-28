@@ -6,8 +6,20 @@ import {
   getDocs, 
   getDocFromServer
 } from 'firebase/firestore';
-import { db, OperationType, handleFirestoreError } from './firebase';
+import { db, OperationType, handleFirestoreError, auth } from './firebase';
 import { UserProgress, SkillNode } from '../types';
+
+const getAvatarEmoji = (id: string | null): string => {
+  const avatars: Record<string, string> = {
+    socrates: '🏛️',
+    hypatia: '🌌',
+    ibnsina: '📜',
+    plato: '⚖️',
+    aristotle: '📖',
+    farabi: '🕌'
+  };
+  return id ? (avatars[id] || '🏛️') : '🏛️';
+};
 
 /**
  * Validates connection to Firestore at boot time as mandated by guidelines
@@ -49,9 +61,50 @@ export async function saveUserProgress(userId: string, progress: UserProgress): 
   const path = `users/${userId}`;
   try {
     const docRef = doc(db, 'users', userId);
-    await setDoc(docRef, progress);
+    
+    // Auto-enrich user document with name and avatar on save
+    const enriched = { ...progress };
+    
+    if (!enriched.displayName && typeof window !== 'undefined') {
+      const currentAuthUser = auth.currentUser;
+      if (currentAuthUser && currentAuthUser.displayName) {
+        enriched.displayName = currentAuthUser.displayName;
+      } else {
+        enriched.displayName = 'طالب علم';
+      }
+    }
+    
+    if (!enriched.avatar && typeof window !== 'undefined') {
+      const savedAv = localStorage.getItem('socrates_avatar_id');
+      enriched.avatar = getAvatarEmoji(savedAv);
+    }
+    
+    await setDoc(docRef, enriched, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Fetches all registered users' progress to construct the weekly leaderboard
+ */
+export async function getAllUsersProgress(): Promise<any[]> {
+  const path = 'users';
+  try {
+    const collRef = collection(db, 'users');
+    const querySnapshot = await getDocs(collRef);
+    const results: any[] = [];
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      results.push({
+        id: doc.id,
+        ...data
+      });
+    });
+    return results;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return [];
   }
 }
 

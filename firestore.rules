@@ -61,16 +61,16 @@ service cloud.firestore {
 
     // Match Rules
     match /users/{userId} {
-      allow read: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidUserProgress(incoming());
-      allow update: if isOwner(userId) && isValidUserProgress(incoming());
-      allow delete: if isOwner(userId);
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidUserProgress(incoming());
+      allow update: if isSignedIn() && request.auth.uid == userId && isValidUserProgress(incoming());
+      allow delete: if isSignedIn() && request.auth.uid == userId;
 
       match /books/{bookId} {
-        allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidId(bookId) && isValidCustomBook(incoming(), userId);
-        allow update: if isOwner(userId) && isValidId(bookId) && isValidCustomBook(incoming(), userId);
-        allow delete: if isOwner(userId) && isValidId(bookId);
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId && isValidId(bookId) && isValidCustomBook(incoming(), userId);
+        allow update: if isSignedIn() && request.auth.uid == userId && isValidId(bookId) && isValidCustomBook(incoming(), userId);
+        allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(bookId);
       }
     }
   }

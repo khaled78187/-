@@ -12,9 +12,10 @@ interface LessonModalProps {
   lesson: Lesson;
   onClose: () => void;
   onFinishLesson: (xpEarned: number, heartsRemaining: number) => void;
+  isPremium?: boolean;
 }
 
-export default function LessonModal({ lesson, onClose, onFinishLesson }: LessonModalProps) {
+export default function LessonModal({ lesson, onClose, onFinishLesson, isPremium = false }: LessonModalProps) {
   // Try to load any previously saved state for this specific lesson
   const getSavedState = () => {
     try {
@@ -215,8 +216,10 @@ export default function LessonModal({ lesson, onClose, onFinishLesson }: LessonM
       triggerVoice(happyDialogue);
     } else {
       setShouldShake(true);
-      const nextHearts = hearts - 1;
-      setHearts(nextHearts);
+      const nextHearts = isPremium ? hearts : hearts - 1;
+      if (!isPremium) {
+        setHearts(nextHearts);
+      }
       setMascotMood('sad');
       
       const sadDialogue = `عذراً يا صديقي، الفكرة بحاجة إلى إعادة نظر. التفسير: ${currentQ.explanation || 'أعد تنقيح المبادئ، فالعلم يحتاج إلى التمحيص والتعرف على الحق.'}`;
@@ -229,7 +232,7 @@ export default function LessonModal({ lesson, onClose, onFinishLesson }: LessonM
         addFailedQuestion(activeNodeId, currentQ);
       }
 
-      if (nextHearts <= 0) {
+      if (!isPremium && nextHearts <= 0) {
         playGameOverSound();
         setTimeout(() => setIsGameOver(true), 1500);
       } else {
@@ -302,14 +305,20 @@ export default function LessonModal({ lesson, onClose, onFinishLesson }: LessonM
             <span>{xpEarned} XP</span>
           </div>
 
-          <div className="flex items-center gap-1">
-            {[...Array(5)].map((_, i) => (
-              <Heart 
-                key={i} 
-                className={`w-5 h-5 ${i < hearts ? 'text-rose-500 fill-rose-500 animate-pulse' : 'text-gray-300'}`} 
-              />
-            ))}
-          </div>
+          {isPremium ? (
+            <div className="flex items-center gap-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white px-3 py-1.5 rounded-xl text-xs font-extrabold shadow-sm border border-amber-400">
+              <span>👑 لا نهائي ∞</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              {[...Array(5)].map((_, i) => (
+                <Heart 
+                  key={i} 
+                  className={`w-5 h-5 ${i < hearts ? 'text-rose-500 fill-rose-500 animate-pulse' : 'text-gray-300'}`} 
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

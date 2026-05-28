@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Brain, 
   Trophy, 
   Calendar, 
-  MessageSquare, 
   FolderGit2, 
   Heart, 
   Zap, 
@@ -14,7 +13,10 @@ import {
   LogIn,
   LogOut,
   RefreshCw,
-  UserCheck
+  UserCheck,
+  User as UserIcon,
+  Flame,
+  Crown
 } from 'lucide-react';
 
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
@@ -29,18 +31,19 @@ import { getFailedQuestions, clearFailedQuestions } from './utils/reviewStorage'
 // Importing our newly created modular components
 import SkillMap from './components/SkillMap';
 import LessonModal from './components/LessonModal';
-import SocratesChat from './components/SocratesChat';
+import UserProfile from './components/UserProfile';
 import Leaderboard from './components/Leaderboard';
 import ProgressCharts from './components/ProgressCharts';
 import TechDocs from './components/TechDocs';
 import TextbookConverter from './components/TextbookConverter';
 import AuthModal from './components/AuthModal';
+import SubscriptionModal from './components/SubscriptionModal';
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<'map' | 'leaderboard' | 'progress' | 'chat' | 'docs' | 'textbook'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'leaderboard' | 'progress' | 'profile' | 'docs' | 'textbook'>('map');
 
-  const handleTabChange = (tab: 'map' | 'leaderboard' | 'progress' | 'chat' | 'docs' | 'textbook') => {
+  const handleTabChange = (tab: 'map' | 'leaderboard' | 'progress' | 'profile' | 'docs' | 'textbook') => {
     playClickSound();
     setActiveTab(tab);
   };
@@ -61,6 +64,52 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+
+  // Subscription States (Premium Access)
+  const [isPremium, setIsPremium] = useState<boolean>(() => {
+    return localStorage.getItem('socrates_is_premium') === 'true';
+  });
+  const [subscriptionType, setSubscriptionType] = useState<'monthly' | 'yearly' | null>(() => {
+    return localStorage.getItem('socrates_sub_type') as 'monthly' | 'yearly' | null;
+  });
+  const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
+
+  // Daily XP Goal & Today's XP Progress
+  const [dailyXpGoal, setDailyXpGoal] = useState<number>(() => {
+    const saved = localStorage.getItem('socrates_daily_xp_goal');
+    return saved ? parseInt(saved, 10) : 50;
+  });
+  const [todayXpEarned, setTodayXpEarned] = useState<number>(() => {
+    const d = new Date();
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const saved = localStorage.getItem(`socrates_xp_earned_${dateKey}`);
+    return saved ? parseInt(saved, 10) : 0;
+  });
+
+  // Streak Micro-Interaction Animations
+  const [prevStreak, setPrevStreak] = useState(3);
+  const [streakFlicker, setStreakFlicker] = useState(false);
+  const [showFlameBurst, setShowFlameBurst] = useState(false);
+
+  useEffect(() => {
+    if (streak > prevStreak) {
+      setStreakFlicker(true);
+      setShowFlameBurst(true);
+      const timer = setTimeout(() => {
+        setStreakFlicker(false);
+      }, 1500);
+      const burstTimer = setTimeout(() => {
+        setShowFlameBurst(false);
+      }, 2500);
+      setPrevStreak(streak);
+      return () => {
+        clearTimeout(timer);
+        clearTimeout(burstTimer);
+      };
+    } else {
+      setPrevStreak(streak);
+    }
+  }, [streak, prevStreak]);
 
   // Test connection & Listen to auth state
   useEffect(() => {
@@ -87,6 +136,22 @@ export default function App() {
             if (progress.weeklyActivity) {
               setWeeklyActivity(progress.weeklyActivity);
             }
+            if (progress.dailyXpGoal) {
+              setDailyXpGoal(progress.dailyXpGoal);
+              localStorage.setItem('socrates_daily_xp_goal', String(progress.dailyXpGoal));
+            }
+            
+            // Populate premium attributes
+            const hasPrem = !!progress.isPremium;
+            setIsPremium(hasPrem);
+            setSubscriptionType(progress.subscriptionType || null);
+            if (hasPrem) {
+              localStorage.setItem('socrates_is_premium', 'true');
+              localStorage.setItem('socrates_sub_type', progress.subscriptionType || 'yearly');
+            } else {
+              localStorage.removeItem('socrates_is_premium');
+              localStorage.removeItem('socrates_sub_type');
+            }
           } else {
             // First time login: seed default progress template to Firestore
             const initialProgress: UserProgress = {
@@ -99,7 +164,10 @@ export default function App() {
               completedNodes: [],
               weeklyActivity: MOCK_WEEKLY_ACTIVITY,
               league: 'Bronze',
-              lastActiveDate: new Date().toISOString()
+              lastActiveDate: new Date().toISOString(),
+              isPremium: false,
+              subscriptionType: undefined,
+              dailyXpGoal: dailyXpGoal
             };
             await saveUserProgress(user.uid, initialProgress);
             
@@ -111,6 +179,10 @@ export default function App() {
             setCompletedNodes([]);
             setCurrentNodeId(SKILL_NODES[0]?.id || 'sec_philosophy');
             setWeeklyActivity(MOCK_WEEKLY_ACTIVITY);
+            setIsPremium(false);
+            setSubscriptionType(null);
+            localStorage.removeItem('socrates_is_premium');
+            localStorage.removeItem('socrates_sub_type');
           }
 
           // Fetch user-uploaded books from firestore
@@ -142,7 +214,160 @@ export default function App() {
 
   const handleLogout = async () => {
     playClickSound();
+    setIsPremium(false);
+    setSubscriptionType(null);
+    localStorage.removeItem('socrates_is_premium');
+    localStorage.removeItem('socrates_sub_type');
+    localStorage.removeItem('socrates_sub_type_purchased');
     await signOut(auth);
+  };
+
+  const [awardedPremiumFromLeaderboard, setAwardedPremiumFromLeaderboard] = useState<boolean>(() => {
+    return localStorage.getItem('socrates_premium_rewarded') === 'true';
+  });
+
+  const handleAwardPremium = async (active: boolean) => {
+    if (active === awardedPremiumFromLeaderboard) return;
+    setAwardedPremiumFromLeaderboard(active);
+    
+    if (active) {
+      if (!isPremium) {
+        setIsPremium(true);
+        setSubscriptionType('monthly');
+        localStorage.setItem('socrates_is_premium', 'true');
+        localStorage.setItem('socrates_sub_type', 'monthly');
+        localStorage.setItem('socrates_premium_rewarded', 'true');
+        
+        if (currentUser) {
+          setIsSyncing(true);
+          try {
+            await saveUserProgress(currentUser.uid, {
+              hearts,
+              streak,
+              xp: userXp,
+              currentNodeId,
+              currentLessonId: '',
+              completedLessons,
+              completedNodes,
+              weeklyActivity,
+              league: 'Bronze',
+              lastActiveDate: new Date().toISOString(),
+              isPremium: true,
+              subscriptionType: 'monthly',
+              dailyXpGoal: dailyXpGoal
+            });
+          } catch (err) {
+            console.error("Error saving rewarded subscriber profile to Firestore:", err);
+          } finally {
+            setIsSyncing(false);
+          }
+        }
+      }
+    } else {
+      const wasRewarded = localStorage.getItem('socrates_premium_rewarded') === 'true';
+      if (wasRewarded && !localStorage.getItem('socrates_sub_type_purchased')) {
+        setIsPremium(false);
+        setSubscriptionType(null);
+        localStorage.removeItem('socrates_is_premium');
+        localStorage.removeItem('socrates_sub_type');
+        localStorage.removeItem('socrates_premium_rewarded');
+        
+        if (currentUser) {
+          setIsSyncing(true);
+          try {
+            await saveUserProgress(currentUser.uid, {
+              hearts,
+              streak,
+              xp: userXp,
+              currentNodeId,
+              currentLessonId: '',
+              completedLessons,
+              completedNodes,
+              weeklyActivity,
+              league: 'Bronze',
+              lastActiveDate: new Date().toISOString(),
+              isPremium: false,
+              subscriptionType: undefined,
+              dailyXpGoal: dailyXpGoal
+            });
+          } catch (err) {
+            console.error("Error removing rewarded subscriber status from Firestore:", err);
+          } finally {
+            setIsSyncing(false);
+          }
+        }
+      }
+    }
+  };
+
+  const handleActivatePremium = async (type: 'monthly' | 'yearly') => {
+    setIsPremium(true);
+    setSubscriptionType(type);
+    localStorage.setItem('socrates_is_premium', 'true');
+    localStorage.setItem('socrates_sub_type', type);
+    localStorage.setItem('socrates_sub_type_purchased', 'true');
+
+    if (currentUser) {
+      setIsSyncing(true);
+      try {
+        await saveUserProgress(currentUser.uid, {
+          hearts,
+          streak,
+          xp: userXp,
+          currentNodeId,
+          currentLessonId: '',
+          completedLessons,
+          completedNodes,
+          weeklyActivity,
+          league: 'Bronze',
+          lastActiveDate: new Date().toISOString(),
+          isPremium: true,
+          subscriptionType: type,
+          subscriptionExpiry: new Date(Date.now() + (type === 'monthly' ? 30 : 365) * 24 * 60 * 60 * 1000).toISOString(),
+          dailyXpGoal: dailyXpGoal
+        });
+      } catch (err) {
+        console.error("Error saving subscriber profile to Firestore:", err);
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+  };
+
+  const handleCancelPremium = async () => {
+    playClickSound();
+    setIsPremium(false);
+    setSubscriptionType(null);
+    localStorage.removeItem('socrates_is_premium');
+    localStorage.removeItem('socrates_sub_type');
+    localStorage.removeItem('socrates_sub_type_purchased');
+    localStorage.removeItem('socrates_premium_rewarded');
+
+    if (currentUser) {
+      setIsSyncing(true);
+      try {
+        await saveUserProgress(currentUser.uid, {
+          hearts,
+          streak,
+          xp: userXp,
+          currentNodeId,
+          currentLessonId: '',
+          completedLessons,
+          completedNodes,
+          weeklyActivity,
+          league: 'Bronze',
+          lastActiveDate: new Date().toISOString(),
+          isPremium: false,
+          subscriptionType: undefined,
+          subscriptionExpiry: undefined,
+          dailyXpGoal: dailyXpGoal
+        });
+      } catch (err) {
+        console.error("Error removing subscription state from Firestore:", err);
+      } finally {
+        setIsSyncing(false);
+      }
+    }
   };
 
   // Custom injection of new chapters generated from Textbook PDFs
@@ -264,6 +489,13 @@ export default function App() {
     setWeeklyActivity(nextWeekly);
     setStreak(nextStreak);
 
+    // Update daily XP progress tracking
+    const todayD = new Date();
+    const dateKey = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
+    const nextTodayXp = todayXpEarned + xpEarned;
+    setTodayXpEarned(nextTodayXp);
+    localStorage.setItem(`socrates_xp_earned_${dateKey}`, String(nextTodayXp));
+
     // 6. Persist to Firestore if user log is active
     if (currentUser) {
       setIsSyncing(true);
@@ -278,7 +510,10 @@ export default function App() {
           completedNodes: nextNodes,
           weeklyActivity: nextWeekly,
           league: 'Bronze',
-          lastActiveDate: new Date().toISOString()
+          lastActiveDate: new Date().toISOString(),
+          isPremium: isPremium,
+          subscriptionType: subscriptionType || undefined,
+          dailyXpGoal: dailyXpGoal
         });
       } catch (err) {
         console.error("Error syncing completed lesson data to Firebase Firestore:", err);
@@ -340,28 +575,176 @@ export default function App() {
         </div>
 
         {/* Global Stats Trays */}
-        <div className="flex items-center gap-3 font-mono">
+        <div className="flex items-center gap-2 sm:gap-3 font-mono">
+          {/* Daily XP Goal Progress Bar */}
+          <div 
+            className="flex flex-col gap-0.5 items-end min-w-[70px] sm:min-w-[125px] bg-amber-500/5 hover:bg-amber-500/10 transition-colors border border-amber-500/10 rounded-xl px-2.5 py-1 text-right select-none cursor-help" 
+            title={`هدفك اليومي: تحقيق ${dailyXpGoal} XP. اليوم أنجزت: ${todayXpEarned} XP`}
+          >
+            <div className="flex justify-between w-full text-[9px] font-black font-sans text-amber-800">
+              <span className="font-mono">{Math.min(100, Math.round((todayXpEarned / dailyXpGoal) * 100))}%</span>
+              <span className="hidden sm:inline">الهدف اليومي</span>
+            </div>
+            <div className="w-full bg-amber-100 rounded-full h-1.5 overflow-hidden border border-amber-200/20">
+              <motion.div 
+                className="bg-gradient-to-l from-amber-500 to-orange-500 h-full rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(100, Math.round((todayXpEarned / dailyXpGoal) * 100))}%` }}
+                transition={{ duration: 0.8 }}
+              />
+            </div>
+          </div>
+
           {/* XP Badge */}
-          <div className="flex items-center gap-1.5 bg-amber-50 text-amber-700 font-extrabold px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs border border-amber-100">
-            <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
+          <div className="flex items-center gap-1 bg-amber-50 text-amber-700 font-extrabold px-2 sm:px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs border border-amber-100">
+            <Zap className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-500 fill-amber-500" />
             <span>{userXp} XP</span>
           </div>
 
-          {/* Streak Badge */}
-          <div className="flex items-center gap-1.5 bg-orange-50 text-orange-700 font-extrabold px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs border border-orange-100 animate-pulse">
-            <Award className="w-4 h-4 text-orange-500 fill-orange-500" />
-            <span>{streak} أيام</span>
-          </div>
+          {/* Streak Badge with micro-interaction flame flicker or scale pulse */}
+          <motion.div 
+            animate={streakFlicker ? {
+              scale: [1, 1.25, 1.1, 1.2, 1],
+              rotate: [0, -6, 6, -3, 3, 0],
+              boxShadow: ["0px 0px 0px rgba(249, 115, 22, 0)", "0px 0px 14px rgba(249, 115, 22, 0.4)", "0px 0px 4px rgba(249, 115, 22, 0.1)"]
+            } : { scale: 1, rotate: 0 }}
+            transition={{ duration: 1.2, ease: "easeInOut" }}
+            className={`relative flex items-center gap-1.5 ${
+              streakFlicker 
+                ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white border-orange-400" 
+                : "bg-orange-50 text-orange-700 border-orange-100"
+            } font-extrabold px-2 sm:px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs border transition-colors`}
+          >
+            {/* Flame/Flicker Sparkle Particle */}
+            <AnimatePresence>
+              {showFlameBurst && (
+                <>
+                  <motion.span
+                    initial={{ opacity: 0, scale: 0.3, y: 0 }}
+                    animate={{ opacity: 1, scale: 1.3, y: -25 }}
+                    exit={{ opacity: 0, scale: 0.5, y: -45 }}
+                    transition={{ duration: 1.5, ease: "easeOut" }}
+                    className="absolute text-base pointer-events-none"
+                    style={{ left: '20%' }}
+                  >
+                    🔥
+                  </motion.span>
+                  <motion.span
+                    initial={{ opacity: 0, scale: 0.3, y: 0 }}
+                    animate={{ opacity: 0.8, scale: 1.1, y: -30, x: 15 }}
+                    exit={{ opacity: 0, scale: 0.4, y: -40 }}
+                    transition={{ duration: 1.2, delay: 0.2, ease: "easeOut" }}
+                    className="absolute text-[10px] pointer-events-none"
+                    style={{ right: '10%' }}
+                  >
+                    ✨
+                  </motion.span>
+                  <motion.span
+                    initial={{ opacity: 0, scale: 0.3, y: 0 }}
+                    animate={{ opacity: 0.9, scale: 1, y: -28, x: -15 }}
+                    exit={{ opacity: 0, scale: 0.4, y: -38 }}
+                    transition={{ duration: 1.3, delay: 0.1, ease: "easeOut" }}
+                    className="absolute text-xs pointer-events-none"
+                    style={{ left: '10%' }}
+                  >
+                    ⚡
+                  </motion.span>
+                </>
+              )}
+            </AnimatePresence>
+
+            {/* Flickering Flame Icon or pulsing icon */}
+            <motion.div
+              animate={streakFlicker || streak > 0 ? {
+                scale: [1, 1.15, 0.95, 1.05, 1],
+              } : {}}
+              transition={{ 
+                repeat: streakFlicker ? 0 : Infinity, 
+                repeatType: "reverse", 
+                duration: streakFlicker ? 0.8 : 3, 
+                ease: "easeInOut" 
+              }}
+              className="relative flex items-center justify-center"
+            >
+              <Flame className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
+                streakFlicker ? "text-white fill-amber-100" : "text-orange-500 fill-orange-500 animate-pulse"
+              }`} />
+            </motion.div>
+            
+            <span>{streak} ي</span>
+          </motion.div>
 
           {/* Hearts Status */}
           <div 
-            onClick={handleRefillHearts}
-            className="flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-100 px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs cursor-pointer transition-colors active:scale-95"
-            title="انقر لإعادة ملء القلوب"
+            onClick={() => {
+              playClickSound();
+              if (isPremium) {
+                setSubscriptionModalOpen(true);
+              } else {
+                handleRefillHearts();
+              }
+            }}
+            className={`flex items-center gap-1.5 ${
+              isPremium 
+                ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white border-amber-400 hover:from-amber-600 hover:to-orange-600" 
+                : "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-100"
+            } px-2 sm:px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs cursor-pointer transition-colors active:scale-95 border`}
+            title={isPremium ? "أنت في العضوية الحكيمة الفائقة - اضغط لإدارة باقة سقراط بلس" : "انقر لإعادة ملء القلوب"}
           >
-            <Heart className="w-4 h-4 text-rose-500 fill-rose-500" />
-            <span className="font-bold">{hearts}/5</span>
+            {isPremium ? (
+              <>
+                <Crown className="w-3.5 h-3.5 text-amber-100 fill-amber-100/50" />
+                <span className="font-extrabold">لانهائي ∞</span>
+              </>
+            ) : (
+              <>
+                <Heart className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-500 fill-rose-500" />
+                <span className="font-bold">{hearts}/5</span>
+              </>
+            )}
           </div>
+
+          {/* Cloud Integration Status / Authentication Button */}
+          {currentUser ? (
+            <div className="flex items-center gap-1 sm:gap-2">
+              {isSyncing ? (
+                <div className="flex items-center justify-center p-1.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 animate-pulse" title="جاري رفع البيانات تلقائياً لسحابة غوغل...">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                </div>
+              ) : (
+                <div className="hidden sm:flex items-center gap-1 text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1.5 rounded-xl border border-emerald-100 font-bold" title="تم حفظ كامل تقدمك بالكامل في Firestore">
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-500" />
+                  <span className="hidden md:inline">محفوظ سحابياً</span>
+                </div>
+              )}
+              
+              <div className="flex items-center gap-1">
+                <div className="hidden lg:flex flex-col text-right leading-none mr-1">
+                  <span className="text-[10px] font-black text-gray-700 max-w-[80px] truncate">{currentUser.displayName || 'طالب علم'}</span>
+                  <span className="text-[8px] text-emerald-600 font-sans">مزامنة سحابية</span>
+                </div>
+                <button 
+                  onClick={handleLogout}
+                  title="تسجيل الخروج"
+                  className="p-1.5 rounded-xl bg-gray-50 text-gray-500 hover:text-rose-600 hover:bg-rose-50 border border-gray-200 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                playClickSound();
+                setAuthModalOpen(true);
+              }}
+              title="سجل دخولك لحفظ درجاتك في السحابة"
+              className="flex items-center gap-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 hover:scale-[1.02] active:scale-[0.98] text-white font-black px-2.5 py-1.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer border border-amber-500/20"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">حفظ السحابي</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -436,18 +819,18 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => handleTabChange('chat')}
+              onClick={() => handleTabChange('profile')}
               className={`w-full py-3.5 px-4 rounded-xl font-black text-sm flex items-center justify-between flex-row-reverse transition-all active:scale-[0.98] ${
-                activeTab === 'chat'
+                activeTab === 'profile'
                   ? 'bg-amber-500 text-white shadow-[0_4px_0_0_#D97706]'
                   : 'text-gray-600 hover:bg-gray-50'
               }`}
             >
               <div className="flex items-center gap-2.5 flex-row-reverse">
-                <MessageSquare className="w-4 h-4" />
-                <span>حوار سقراط الذكي</span>
+                <UserIcon className="w-4 h-4" />
+                <span>حسابي وإعداداتي</span>
               </div>
-              <span className="bg-emerald-100 text-emerald-800 text-[10px] py-0.5 px-2 rounded-full font-sans">متصل</span>
+              <span className="bg-amber-100 text-amber-800 text-[10px] py-0.5 px-2 rounded-full font-sans">الحساب</span>
             </button>
 
             <button
@@ -464,6 +847,98 @@ export default function App() {
               </div>
             </button>
           </div>
+
+          {/* Dynamic Cloud Registration Slot */}
+          <div className="mt-2 text-right">
+            {currentUser ? (
+              <div className="bg-white rounded-2xl border-2 border-amber-100/50 p-4 shadow-xs space-y-3 relative overflow-hidden flex flex-col text-right">
+                <div className="absolute top-0 right-0 left-0 h-1 bg-gradient-to-l from-amber-500 to-orange-400" />
+                
+                <div className="flex items-center gap-2.5 flex-row-reverse justify-end">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center font-black text-amber-700 text-sm border-2 border-amber-200 shrink-0">
+                    {currentUser.displayName ? currentUser.displayName[0].toUpperCase() : '👤'}
+                  </div>
+                  <div className="text-right flex-1 min-w-0">
+                    <h4 className="font-extrabold text-xs text-gray-800 truncate">{currentUser.displayName || 'طالب علم'}</h4>
+                    <p className="text-[9px] text-gray-400 truncate font-mono">{currentUser.email}</p>
+                  </div>
+                </div>
+
+                <div className="pt-2.5 border-t border-gray-100 grid grid-cols-2 gap-2 text-center text-xs font-mono font-black">
+                  <div className="bg-gray-50/50 p-2 rounded-xl border border-gray-100">
+                    <span className="text-[9px] text-gray-400 block font-sans">قاعدة البيانات</span>
+                    <span className="text-emerald-600 text-[10px] sm:text-[11px]">Firestore</span>
+                  </div>
+                  <div className="bg-gray-50/50 p-2 rounded-xl border border-gray-100">
+                    <span className="text-[9px] text-gray-400 block font-sans">مزامنة سحابية</span>
+                    <span className="text-amber-600 text-[10px] sm:text-[11px]">تلقائي</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-gray-400 pt-1">
+                  <span>حالة الاتصال</span>
+                  <span className="font-bold text-emerald-500">مزمّن ●</span>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-gradient-to-br from-amber-50/50 to-orange-50/20 rounded-2xl border-2 border-dashed border-amber-200/60 p-4 shadow-2xs space-y-2.5 text-center">
+                <h4 className="font-extrabold text-xs text-amber-800">احفظ رصيد تقدمك الآن! 🚀</h4>
+                <p className="text-[10px] text-amber-900/75 leading-relaxed">
+                  أنشئ حساباً مجانياً لحفظ الـ XP، والـ Streak، والكتب التي ترفعها بسحابة غوغل ومواصلة التعلم من أي جهاز.
+                </p>
+                <button
+                  onClick={() => {
+                    playClickSound();
+                    setAuthModalOpen(true);
+                  }}
+                  className="w-full bg-amber-500 hover:bg-amber-600 hover:scale-[1.01] active:scale-[0.99] transition-all text-white font-black py-2.5 rounded-xl text-xs shadow-md shadow-amber-500/10 cursor-pointer"
+                >
+                  حفظ في السحابة
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Premium Subscription Summary Slot */}
+          <div className="mt-2 text-right">
+            {isPremium ? (
+              <div className="bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-amber-600/10 rounded-2xl border-2 border-amber-300 p-4 shadow-xs relative overflow-hidden flex flex-col text-right">
+                <div className="absolute top-0 right-0 left-0 h-1 bg-gradient-to-l from-amber-500 to-orange-400 animate-pulse" />
+                <div className="flex items-center justify-between flex-row-reverse mb-2">
+                  <div className="bg-amber-100 text-amber-700 font-extrabold text-[9px] px-2.5 py-1 rounded-full border border-amber-200 flex items-center gap-1">
+                    <span>👑 سقراط بلس نشط</span>
+                  </div>
+                  <Crown className="w-5 h-5 text-amber-500 fill-amber-300/60" />
+                </div>
+                <p className="text-[11px] text-amber-900 font-bold leading-relaxed">أنت الآن في الباقة {subscriptionType === 'monthly' ? 'الشهرية' : 'السنوية'} الممتازة.</p>
+                <button
+                  type="button"
+                  onClick={handleCancelPremium}
+                  className="mt-3 w-full bg-white/65 hover:bg-rose-50 text-[10px] text-gray-500 hover:text-rose-600 border border-gray-200 rounded-xl py-1.5 font-bold transition-all cursor-pointer"
+                >
+                  إلغاء الاشتراك الافتراضي ✕
+                </button>
+              </div>
+            ) : (
+              <div className="bg-gradient-to-br from-amber-50 to-orange-50/20 rounded-2xl border-2 border-amber-200/60 p-4 shadow-sm space-y-2 text-center">
+                <div className="flex justify-center text-xl">👑</div>
+                <h4 className="font-extrabold text-xs text-amber-800">اشترك في سقراط بلس!</h4>
+                <p className="text-[10px] text-amber-950/75 leading-relaxed">
+                  افتح قلوباً لا نهائية وميزة تفكيك المناهج السحابية للكتب المدرسية تلقائياً مجاناً %100!
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setSubscriptionModalOpen(true);
+                  }}
+                  className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 transition-all text-white font-black py-2.5 rounded-xl text-xs shadow-md shadow-amber-500/15 cursor-pointer"
+                >
+                  تفعيل مجاني كامل 👑
+                </button>
+              </div>
+            )}
+          </div>
         </aside>
 
         {/* MAIN VIEW CONTROLLER (3 Cols on Desktop, Full on Mobile) */}
@@ -479,16 +954,63 @@ export default function App() {
           )}
 
           {activeTab === 'textbook' && (
-            <TextbookConverter 
-              onInjectNode={handleInjectNode} 
-              alreadyInjected={nodes.some(n => n.id === 'custom_textbook_node')}
-            />
+            isPremium ? (
+              <TextbookConverter 
+                onInjectNode={handleInjectNode} 
+                alreadyInjected={nodes.some(n => n.id === 'custom_textbook_node')}
+              />
+            ) : (
+              <div className="bg-white rounded-3xl border-2 border-gray-150 p-6 md:p-8 shadow-xs text-center space-y-6 max-w-xl mx-auto" dir="rtl">
+                <div className="w-16 h-16 bg-amber-500/10 text-amber-600 rounded-full flex items-center justify-center text-3xl mx-auto border border-amber-200">
+                  👑
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-lg md:text-xl font-extrabold text-gray-800">تحليل وتفكيك الكتب ميزة للمشتركين فقط 👑</h3>
+                  <p className="text-xs md:text-sm text-gray-500 leading-relaxed max-w-md mx-auto">
+                    ميزة <strong>تحليل الكتب المدرسية والـ PDFs وتحويلها لفصول وشروحات تفاعلية ذكية</strong> هي جزء من اشتراك "سقراط بلس".
+                  </p>
+                </div>
+
+                <div className="bg-amber-50/50 border border-amber-200/50 p-4 rounded-2xl flex items-center gap-3 text-right">
+                  <div className="text-lg">🎁</div>
+                  <div className="text-[11px] text-amber-900 leading-relaxed font-bold">
+                    <strong>تفعيل فوري مجاني:</strong> يمكنك الاشتراك بالباقة الشهرية أو السنوية مجاناً تماماً %100 والبدء الفوري بتحليل مناهجك السحابية. لا يتطلب منك دفع أي مبالغ مالية!
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div className="border border-gray-150 p-3 rounded-2xl text-center">
+                    <span className="text-[10px] text-gray-400 font-bold block">باقة سقراط السنوية</span>
+                    <strong className="text-sm font-black text-gray-700 block mt-0.5">199 ريال / سنة</strong>
+                    <span className="text-[9px] text-rose-500 font-bold block mt-0.5">%40 خصم مؤقت</span>
+                  </div>
+                  <div className="border border-gray-150 p-3 rounded-2xl text-center">
+                    <span className="text-[10px] text-gray-400 font-bold block">باقة سقراط الشهرية</span>
+                    <strong className="text-sm font-black text-gray-700 block mt-0.5">29 ريال / شهر</strong>
+                    <span className="text-[9px] text-gray-400 block mt-0.5">للدراسة المرنة</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setSubscriptionModalOpen(true);
+                  }}
+                  className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black py-3 rounded-2xl text-xs sm:text-sm shadow-md shadow-amber-500/15 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+                >
+                  <Crown className="w-4 h-4 text-amber-200 fill-amber-200" />
+                  <span>انضم إلى سقراط بلس وافتح ميزات المناهج مجاناً ↗</span>
+                </button>
+              </div>
+            )
           )}
 
           {activeTab === 'leaderboard' && (
             <Leaderboard 
-              users={MOCK_LEADERBOARD} 
               currentUserXp={userXp} 
+              isPremium={isPremium}
+              onAwardPremium={handleAwardPremium}
             />
           )}
 
@@ -500,8 +1022,56 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'chat' && (
-            <SocratesChat />
+          {activeTab === 'profile' && (
+            <UserProfile 
+              currentUser={currentUser}
+              userXp={userXp}
+              hearts={hearts}
+              streak={streak}
+              completedLessons={completedLessons}
+              completedNodes={completedNodes}
+              weeklyActivity={weeklyActivity}
+              onProgressUpdated={(updates) => {
+                if (updates.xp !== undefined) setUserXp(updates.xp);
+                if (updates.hearts !== undefined) setHearts(updates.hearts);
+                if (updates.streak !== undefined) setStreak(updates.streak);
+                if (updates.completedLessons !== undefined) setCompletedLessons(updates.completedLessons);
+                if (updates.completedNodes !== undefined) setCompletedNodes(updates.completedNodes);
+              }}
+              onOpenAuth={() => {
+                setAuthModalOpen(true);
+              }}
+              dailyXpGoal={dailyXpGoal}
+              todayXpEarned={todayXpEarned}
+              onDailyXpGoalUpdated={async (goal) => {
+                setDailyXpGoal(goal);
+                localStorage.setItem('socrates_daily_xp_goal', String(goal));
+                if (currentUser) {
+                  setIsSyncing(true);
+                  try {
+                    await saveUserProgress(currentUser.uid, {
+                      hearts,
+                      streak,
+                      xp: userXp,
+                      currentNodeId,
+                      currentLessonId: '',
+                      completedLessons,
+                      completedNodes,
+                      weeklyActivity,
+                      league: 'Bronze',
+                      lastActiveDate: new Date().toISOString(),
+                      isPremium,
+                      subscriptionType: subscriptionType || undefined,
+                      dailyXpGoal: goal
+                    });
+                  } catch (err) {
+                    console.error("Error updating daily XP goal on Firestore:", err);
+                  } finally {
+                    setIsSyncing(false);
+                  }
+                }
+              }}
+            />
           )}
 
           {activeTab === 'docs' && (
@@ -554,13 +1124,13 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => handleTabChange('chat')}
+            onClick={() => handleTabChange('profile')}
             className={`flex-1 flex flex-col items-center justify-center gap-1 py-0.5 rounded-xl transition-all ${
-              activeTab === 'chat' ? 'text-amber-500 font-black scale-105' : 'text-gray-400'
+              activeTab === 'profile' ? 'text-amber-500 font-black scale-105' : 'text-gray-400'
             }`}
           >
-            <MessageSquare className="w-5 h-5" />
-            <span>حوار</span>
+            <UserIcon className="w-5 h-5" />
+            <span>حسابي</span>
           </button>
         </div>
       </nav>
@@ -572,6 +1142,20 @@ export default function App() {
             lesson={activeLesson}
             onClose={() => setActiveLesson(null)}
             onFinishLesson={handleFinishLesson}
+            isPremium={isPremium}
+          />
+        )}
+        {authModalOpen && (
+          <AuthModal 
+            isOpen={authModalOpen} 
+            onClose={() => setAuthModalOpen(false)} 
+          />
+        )}
+        {subscriptionModalOpen && (
+          <SubscriptionModal 
+            isOpen={subscriptionModalOpen}
+            onClose={() => setSubscriptionModalOpen(false)}
+            onActivate={handleActivatePremium}
           />
         )}
       </AnimatePresence>

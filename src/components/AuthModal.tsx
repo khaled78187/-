@@ -23,6 +23,7 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -31,14 +32,18 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
     playClickSound();
     setIsLoading(true);
     setError(null);
+    setErrorCode(null);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
       onClose();
     } catch (err: any) {
       console.error(err);
+      setErrorCode(err.code || null);
       if (err.code === 'auth/popup-closed-by-user') {
         setError('تم إغلاق نافذة تسجيل الدخول من قبل المستخدم.');
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError('طريقة تسجيل الدخول باستخدام Google غير مفعّلة في مشروع الـ Firebase الخاص بك.');
       } else {
         setError('حدث خطأ أثناء تسجيل الدخول عبر Google. حاول مجدداً.');
       }
@@ -52,6 +57,7 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
     playClickSound();
     setIsLoading(true);
     setError(null);
+    setErrorCode(null);
 
     if (isSignUp && !fullName.trim()) {
       setError('يرجى إدخال اسمك الكريم أولاً.');
@@ -71,12 +77,15 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
       onClose();
     } catch (err: any) {
       console.error(err);
+      setErrorCode(err.code || null);
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
         setError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
       } else if (err.code === 'auth/email-already-in-use') {
         setError('هذا البريد الإلكتروني مسجل بالفعل.');
       } else if (err.code === 'auth/weak-password') {
         setError('كلمة المرور يجب أن لا تقل عن 6 أحرف.');
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError('طريقة تسجيل الدخول بالبريد الإلكتروني والرمز السري (Email/Password) غير مفعّلة في مشروع الـ Firebase الخاص بك.');
       } else {
         setError('حدث خرق فني أثناء المصادقة. يرجى مراجعة التفاصيل والمحاولة مجدداً.');
       }
@@ -119,6 +128,17 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
             <p className="text-xs text-gray-400">
               {isSignUp ? 'تفقه بعلوم الفكر بمسار سحابي آمن ومستمر لحفظ إنجازاتك' : 'عد لرحلتك المعرفية وزد من رصيد نقاطك ومراكز الصدارة مدمجاً بـ Cloud'}
             </p>
+          </div>
+
+          {/* Reassurance Badge: 100% Free Forever */}
+          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/60 p-3.5 rounded-2xl flex items-start gap-3 flex-row-reverse text-right">
+            <div className="text-xl shrink-0">🎁</div>
+            <div className="space-y-0.5">
+              <h4 className="font-extrabold text-xs text-emerald-800">عضوية مجانية بالكامل %100 مدى الحياة!</h4>
+              <p className="text-[10px] text-emerald-600 leading-relaxed">
+                التسجيل لا يتطلب منك دفع **أي ريال** أو إدخال أي بطاقة بنكية. استمتع بكامل ميزات المنصة والتعلم الفلسفي مجاناً دون أي قيود مالية إطلاقاً.
+              </p>
+            </div>
           </div>
 
           {/* Form */}
@@ -177,10 +197,32 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3.5 rounded-xl flex items-start gap-2 "
+                  className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3.5 rounded-xl flex flex-col gap-2 relative overflow-hidden text-right"
                 >
-                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                  <span>{error}</span>
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+                  {errorCode === 'auth/operation-not-allowed' && (
+                    <div className="mt-2 p-3 bg-white border border-rose-100/50 rounded-lg text-gray-700 space-y-2.5">
+                      <p className="font-extrabold text-[10px] text-gray-500 uppercase tracking-wider">خطوات التفعيل في دقيقة واحدة:</p>
+                      <ol className="list-decimal list-inside text-[11px] leading-relaxed text-gray-600 font-medium space-y-1.5 pr-1">
+                        <li>افتح <a href="https://console.firebase.google.com/project/tough-terminus-ckm1r/authentication/providers" target="_blank" rel="noopener noreferrer" className="text-amber-600 font-extrabold underline hover:text-amber-700">هذا الرابط المباشر ↗</a> لمشروعك.</li>
+                        <li>انقر على زر <strong className="text-gray-950 bg-gray-50 px-1 py-0.5 rounded border border-gray-200">Add new provider</strong>.</li>
+                        <li>اختر <strong className="text-gray-950 bg-gray-50 px-1 py-0.5 rounded border border-gray-200">Email/Password</strong> وقم بتفعيله (Enable).</li>
+                        <li>احفظ التغييرات وعد إلى هنا لإتمام التسجيل بنجاح!</li>
+                      </ol>
+                      
+                      <a 
+                        href="https://console.firebase.google.com/project/tough-terminus-ckm1r/authentication/providers"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 hover:scale-[1.01] active:scale-[0.99] transition-all text-white font-black rounded-xl text-xs shadow-xs cursor-pointer border-none mt-1"
+                      >
+                        فتح لوحة تحكم Firebase Auth ↗
+                      </a>
+                    </div>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>

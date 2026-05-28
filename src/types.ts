@@ -82,6 +82,12 @@ export interface UserProgress {
   weeklyActivity: DailyActivity[];
   league: string; // Bronze, Silver, Gold, Platinum, Diamond
   lastActiveDate: string; // For streak calculation
+  isPremium?: boolean;
+  subscriptionType?: 'monthly' | 'yearly';
+  subscriptionExpiry?: string;
+  dailyXpGoal?: number;
+  displayName?: string;
+  avatar?: string;
 }
 
 export type SocratesMood = 'happy' | 'sad' | 'thinking' | 'neutral' | 'wise';
