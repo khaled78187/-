@@ -16,16 +16,17 @@ import {
   UserCheck,
   User as UserIcon,
   Flame,
-  Crown
+  Crown,
+  ShieldCheck
 } from 'lucide-react';
 
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { auth } from './lib/firebase';
-import { testConnection, getUserProgress, saveUserProgress, saveCustomBook, getUserCustomBooks } from './lib/userService';
+import { testConnection, getUserProgress, saveUserProgress, saveCustomBook, getUserCustomBooks, deleteCustomBook, subscribeToUserProgress } from './lib/userService';
 
 import { SKILL_NODES, MOCK_LEADERBOARD, MOCK_WEEKLY_ACTIVITY } from './data';
 import { UserProgress, Lesson, LeaderboardUser, DailyActivity, SkillNode } from './types';
-import { playClickSound } from './utils/audio';
+import { playClickSound, playSuccessSound } from './utils/audio';
 import { getFailedQuestions, clearFailedQuestions } from './utils/reviewStorage';
 
 // Importing our newly created modular components
@@ -33,17 +34,19 @@ import SkillMap from './components/SkillMap';
 import LessonModal from './components/LessonModal';
 import UserProfile from './components/UserProfile';
 import Leaderboard from './components/Leaderboard';
-import ProgressCharts from './components/ProgressCharts';
+import ConceptConverter from './components/ConceptConverter';
 import TechDocs from './components/TechDocs';
 import TextbookConverter from './components/TextbookConverter';
+import AdminDashboard from './components/AdminDashboard';
 import AuthModal from './components/AuthModal';
 import SubscriptionModal from './components/SubscriptionModal';
+import socratesAppIcon from './assets/images/socrates_app_icon_1779976695367.png';
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<'map' | 'leaderboard' | 'progress' | 'profile' | 'docs' | 'textbook'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'leaderboard' | 'progress' | 'profile' | 'docs' | 'textbook' | 'admin'>('map');
 
-  const handleTabChange = (tab: 'map' | 'leaderboard' | 'progress' | 'profile' | 'docs' | 'textbook') => {
+  const handleTabChange = (tab: 'map' | 'leaderboard' | 'progress' | 'profile' | 'docs' | 'textbook' | 'admin') => {
     playClickSound();
     setActiveTab(tab);
   };
@@ -59,6 +62,14 @@ export default function App() {
   const [completedNodes, setCompletedNodes] = useState<string[]>([]);
   const [currentNodeId, setCurrentNodeId] = useState(SKILL_NODES[0]?.id || 'sec_philosophy');
   const [weeklyActivity, setWeeklyActivity] = useState<DailyActivity[]>(MOCK_WEEKLY_ACTIVITY);
+  const [achievements, setAchievements] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('socrates_unlocked_achievements');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   
   // Authentication & Sync State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -69,10 +80,14 @@ export default function App() {
   const [isPremium, setIsPremium] = useState<boolean>(() => {
     return localStorage.getItem('socrates_is_premium') === 'true';
   });
-  const [subscriptionType, setSubscriptionType] = useState<'monthly' | 'yearly' | null>(() => {
-    return localStorage.getItem('socrates_sub_type') as 'monthly' | 'yearly' | null;
+  const [subscriptionType, setSubscriptionType] = useState<'monthly' | 'yearly' | 'lifetime' | null>(() => {
+    return localStorage.getItem('socrates_sub_type') as 'monthly' | 'yearly' | 'lifetime' | null;
+  });
+  const [hasUsedFreeSmartPath, setHasUsedFreeSmartPath] = useState<boolean>(() => {
+    return localStorage.getItem('socrates_has_used_free_smartpath') === 'true';
   });
   const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
+  const [stripeVerificationState, setStripeVerificationState] = useState<'idle' | 'verifying' | 'success' | 'failure'>('idle');
 
   // Daily XP Goal & Today's XP Progress
   const [dailyXpGoal, setDailyXpGoal] = useState<number>(() => {
@@ -90,6 +105,25 @@ export default function App() {
   const [prevStreak, setPrevStreak] = useState(3);
   const [streakFlicker, setStreakFlicker] = useState(false);
   const [showFlameBurst, setShowFlameBurst] = useState(false);
+  
+  // Streak expiration check warning states
+  const [showStreakWarning, setShowStreakWarning] = useState<boolean>(false);
+
+  useEffect(() => {
+    // We only trigger this warning pop-up once per browser tab session
+    const alreadyWarnedThisSession = sessionStorage.getItem('socrates_streak_warned_session');
+    
+    if (streak > 0 && todayXpEarned === 0 && !alreadyWarnedThisSession) {
+      const warningTimer = setTimeout(() => {
+        setShowStreakWarning(true);
+        sessionStorage.setItem('socrates_streak_warned_session', 'true');
+      }, 2500); // 2.5 seconds delay after load for great feedback feel
+      return () => clearTimeout(warningTimer);
+    } else if (todayXpEarned > 0) {
+      // If they earn XP, we can hide the warning immediately as they are now safe!
+      setShowStreakWarning(false);
+    }
+  }, [streak, todayXpEarned]);
 
   useEffect(() => {
     if (streak > prevStreak) {
@@ -111,106 +145,240 @@ export default function App() {
     }
   }, [streak, prevStreak]);
 
+  // Handle Stripe Checkout redirects: Check success or cancel callback parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('stripe_session_id');
+    const cancel = params.get('stripe_cancel');
+
+    if (cancel) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      alert('تم إلغاء عملية الدفع. نرحب بزيارتك لبوابة الترقية في أي وقت!');
+    } else if (sessionId) {
+      const verifyStripePayment = async () => {
+        setStripeVerificationState('verifying');
+        playClickSound();
+        try {
+          const res = await fetch('/api/stripe/verify-checkout-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId })
+          });
+          const data = await res.json();
+          if (data.success) {
+            setStripeVerificationState('success');
+            playSuccessSound();
+            setIsPremium(true);
+            setSubscriptionType(data.planType || 'yearly');
+            localStorage.setItem('socrates_is_premium', 'true');
+            localStorage.setItem('socrates_sub_type', data.planType || 'yearly');
+            localStorage.setItem('socrates_sub_type_purchased', 'true');
+
+            // Sync user states immediately with Firestore if logged in
+            if (currentUser) {
+              await saveUserProgress(currentUser.uid, {
+                hearts: hearts || 5,
+                streak: streak || 3,
+                xp: userXp || 1200,
+                currentNodeId,
+                currentLessonId: '',
+                completedLessons,
+                completedNodes,
+                weeklyActivity,
+                league: 'Bronze',
+                lastActiveDate: new Date().toISOString(),
+                isPremium: true,
+                subscriptionType: data.planType || 'yearly',
+                subscriptionExpiry: new Date(Date.now() + (data.planType === 'monthly' ? 30 : 365) * 24 * 60 * 60 * 1000).toISOString(),
+                dailyXpGoal,
+                achievements
+              });
+            }
+          } else {
+            setStripeVerificationState('failure');
+          }
+        } catch (err) {
+          console.error("Stripe verification failed:", err);
+          setStripeVerificationState('failure');
+        } finally {
+          // Clean the URL queries nicely
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      };
+
+      verifyStripePayment();
+    }
+  }, [currentUser]);
+
   // Test connection & Listen to auth state
   useEffect(() => {
     // 1. Validate connection with Firebase on boot as constraint
     testConnection();
 
     // 2. React to auth changes
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
-      if (user) {
-        setIsSyncing(true);
-        try {
-          // Fetch existing user progress from firestore
-          const progress = await getUserProgress(user.uid);
-          if (progress) {
-            setUserXp(progress.xp);
-            setHearts(progress.hearts);
-            setStreak(progress.streak);
-            setCompletedLessons(progress.completedLessons);
-            setCompletedNodes(progress.completedNodes);
-            if (progress.currentNodeId) {
-              setCurrentNodeId(progress.currentNodeId);
-            }
-            if (progress.weeklyActivity) {
-              setWeeklyActivity(progress.weeklyActivity);
-            }
-            if (progress.dailyXpGoal) {
-              setDailyXpGoal(progress.dailyXpGoal);
-              localStorage.setItem('socrates_daily_xp_goal', String(progress.dailyXpGoal));
-            }
-            
-            // Populate premium attributes
-            const hasPrem = !!progress.isPremium;
-            setIsPremium(hasPrem);
-            setSubscriptionType(progress.subscriptionType || null);
-            if (hasPrem) {
-              localStorage.setItem('socrates_is_premium', 'true');
-              localStorage.setItem('socrates_sub_type', progress.subscriptionType || 'yearly');
-            } else {
-              localStorage.removeItem('socrates_is_premium');
-              localStorage.removeItem('socrates_sub_type');
-            }
-          } else {
-            // First time login: seed default progress template to Firestore
-            const initialProgress: UserProgress = {
-              hearts: 5,
-              streak: 3,
-              xp: 1200,
-              currentNodeId: SKILL_NODES[0]?.id || 'sec_philosophy',
-              currentLessonId: '',
-              completedLessons: [],
-              completedNodes: [],
-              weeklyActivity: MOCK_WEEKLY_ACTIVITY,
-              league: 'Bronze',
-              lastActiveDate: new Date().toISOString(),
-              isPremium: false,
-              subscriptionType: undefined,
-              dailyXpGoal: dailyXpGoal
-            };
-            await saveUserProgress(user.uid, initialProgress);
-            
-            // Sync default back to local
-            setUserXp(1200);
-            setHearts(5);
-            setStreak(3);
-            setCompletedLessons([]);
-            setCompletedNodes([]);
-            setCurrentNodeId(SKILL_NODES[0]?.id || 'sec_philosophy');
-            setWeeklyActivity(MOCK_WEEKLY_ACTIVITY);
-            setIsPremium(false);
-            setSubscriptionType(null);
-            localStorage.removeItem('socrates_is_premium');
-            localStorage.removeItem('socrates_sub_type');
-          }
-
-          // Fetch user-uploaded books from firestore
-          const books = await getUserCustomBooks(user.uid);
-          if (books && books.length > 0) {
-            setNodes(prev => {
-              const combined = [...prev];
-              books.forEach(b => {
-                if (!combined.some(c => c.id === b.id)) {
-                  combined.unshift(b);
-                }
-              });
-              return combined;
-            });
-          }
-        } catch (e) {
-          console.error("Error loading user session from Firestore:", e);
-        } finally {
-          setIsSyncing(false);
-        }
-      } else {
-        // Reset custom nodes to default when logged out
+      if (!user) {
+        // Logged out: reset to guest defaults to avoid carrying over previous user stats
+        setUserXp(1200);
+        setHearts(5);
+        setStreak(3);
+        setCompletedLessons([]);
+        setCompletedNodes([]);
+        setCurrentNodeId(SKILL_NODES[0]?.id || 'sec_philosophy');
+        setWeeklyActivity(MOCK_WEEKLY_ACTIVITY);
+        setAchievements([]);
+        setIsPremium(false);
+        setSubscriptionType(null);
         setNodes(SKILL_NODES);
+        setHasUsedFreeSmartPath(localStorage.getItem('socrates_has_used_free_smartpath') === 'true');
+        localStorage.removeItem('socrates_is_premium');
+        localStorage.removeItem('socrates_sub_type');
+        localStorage.removeItem('socrates_sub_type_purchased');
       }
     });
 
-    return () => unsubscribe();
+    return () => unsubscribeAuth();
   }, []);
+
+  // 3. Real-time Firestore Stream synchronization
+  useEffect(() => {
+    if (!currentUser) return;
+
+    setIsSyncing(true);
+    const unsubscribeProgress = subscribeToUserProgress(
+      currentUser.uid,
+      async (progress) => {
+        setIsSyncing(false);
+        if (progress) {
+          // Sync with the incoming real-time document
+          setUserXp(progress.xp);
+          setHearts(progress.hearts);
+          setStreak(progress.streak);
+          setCompletedLessons(progress.completedLessons);
+          setCompletedNodes(progress.completedNodes);
+          if (progress.currentNodeId) {
+            setCurrentNodeId(progress.currentNodeId);
+          }
+          if (progress.weeklyActivity) {
+            setWeeklyActivity(progress.weeklyActivity);
+          }
+          if (progress.achievements) {
+            setAchievements(progress.achievements);
+            localStorage.setItem('socrates_unlocked_achievements', JSON.stringify(progress.achievements));
+          }
+          if (progress.dailyXpGoal) {
+            setDailyXpGoal(progress.dailyXpGoal);
+            localStorage.setItem('socrates_daily_xp_goal', String(progress.dailyXpGoal));
+          }
+          
+          // Load free smart path usage tracker
+          const usedFreePath = !!progress.hasUsedFreeSmartPath;
+          setHasUsedFreeSmartPath(usedFreePath);
+          if (usedFreePath) {
+            localStorage.setItem('socrates_has_used_free_smartpath', 'true');
+          } else {
+            localStorage.removeItem('socrates_has_used_free_smartpath');
+          }
+
+          // Populate premium attributes and verify if unsubscribed or expired
+          let hasPrem = !!progress.isPremium;
+          if (currentUser && currentUser.email === 'khaledany333@gmail.com') {
+            hasPrem = true;
+            if (!progress.isPremium || progress.subscriptionType !== 'lifetime') {
+              try {
+                await saveUserProgress(currentUser.uid, {
+                  ...progress,
+                  isPremium: true,
+                  subscriptionType: 'lifetime',
+                  subscriptionExpiry: '2100-01-01T00:00:00.000Z'
+                });
+              } catch (err) {
+                console.error("Failed to sync admin premium status to Firestore:", err);
+              }
+            }
+          } else if (hasPrem && progress.subscriptionExpiry) {
+            const expiryTime = new Date(progress.subscriptionExpiry).getTime();
+            if (expiryTime < Date.now()) {
+              hasPrem = false;
+              // Update Firestore quietly to make sure expiration is persisted
+              try {
+                await saveUserProgress(currentUser.uid, {
+                  ...progress,
+                  isPremium: false,
+                  subscriptionType: undefined,
+                  subscriptionExpiry: undefined
+                });
+              } catch (err) {
+                console.error("Expired subscription cleanup failed on streaming update:", err);
+              }
+            }
+          }
+
+          setIsPremium(hasPrem);
+          setSubscriptionType(hasPrem ? (progress.subscriptionType || 'yearly') : null);
+          if (hasPrem) {
+            localStorage.setItem('socrates_is_premium', 'true');
+            localStorage.setItem('socrates_sub_type', (currentUser && currentUser.email === 'khaledany333@gmail.com') ? 'lifetime' : (progress.subscriptionType || 'yearly'));
+          } else {
+            localStorage.removeItem('socrates_is_premium');
+            localStorage.removeItem('socrates_sub_type');
+          }
+        } else {
+          // Document does not exist: User registering for the first time via Firebase Auth
+          const isAdmin = currentUser && currentUser.email === 'khaledany333@gmail.com';
+          const localHasUsed = localStorage.getItem('socrates_has_used_free_smartpath') === 'true';
+          const initialProgress: UserProgress = {
+            hearts: 5,
+            streak: 3,
+            xp: 1200,
+            currentNodeId: SKILL_NODES[0]?.id || 'sec_philosophy',
+            currentLessonId: '',
+            completedLessons: [],
+            completedNodes: [],
+            weeklyActivity: MOCK_WEEKLY_ACTIVITY,
+            league: 'Bronze',
+            lastActiveDate: new Date().toISOString(),
+            isPremium: !!isAdmin,
+            hasUsedFreeSmartPath: localHasUsed,
+            subscriptionType: isAdmin ? 'lifetime' : undefined,
+            subscriptionExpiry: isAdmin ? '2100-01-01T00:00:00.000Z' : undefined,
+            dailyXpGoal: dailyXpGoal,
+            achievements: achievements
+          };
+          try {
+            await saveUserProgress(currentUser.uid, initialProgress);
+          } catch (e) {
+            console.error("Error saving initial progress for new UID:", e);
+          }
+        }
+      },
+      (error) => {
+        console.error("Error with real-time progress subscription of Firestore stream:", error);
+      }
+    );
+
+    // Fetch user-uploaded custom books/nodes from Firestore
+    getUserCustomBooks(currentUser.uid).then((books) => {
+      if (books && books.length > 0) {
+        setNodes(prev => {
+          const combined = [...prev];
+          books.forEach(b => {
+            if (!combined.some(c => c.id === b.id)) {
+              combined.unshift(b);
+            }
+          });
+          return combined;
+        });
+      }
+    }).catch(err => {
+      console.error("Error loaded custom textbooks on auth sync:", err);
+    });
+
+    return () => {
+      unsubscribeProgress();
+    };
+  }, [currentUser]);
 
   const handleLogout = async () => {
     playClickSound();
@@ -392,6 +560,30 @@ export default function App() {
       }
     }
   };
+
+  // Custom deletion of converted textbook PDFs
+  const handleDeleteBook = async (bookId: string) => {
+    playClickSound();
+    
+    // Remove the book from the active nodes map
+    setNodes(prev => prev.filter(n => n.id !== bookId));
+    
+    // If the active node was this book, reset to default node
+    if (currentNodeId === bookId) {
+      setCurrentNodeId(SKILL_NODES[0]?.id || 'sec_philosophy');
+    }
+
+    if (currentUser) {
+      setIsSyncing(true);
+      try {
+        await deleteCustomBook(currentUser.uid, bookId);
+      } catch (err) {
+        console.error("Error deleting book from Cloud Firestore:", err);
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+  };
   
   // Active immersive lesson
   const [activeLesson, setActiveLesson] = useState<Lesson | null>(null);
@@ -489,6 +681,31 @@ export default function App() {
     setWeeklyActivity(nextWeekly);
     setStreak(nextStreak);
 
+    // 5.5 Check newly met achievements
+    const newList = [...achievements];
+    if (nextHearts === 5) {
+      localStorage.setItem('socrates_achievement_perfect_lesson_unlocked', 'true');
+      if (!newList.includes('perfect_lesson')) newList.push('perfect_lesson');
+    }
+    if (nextXp >= 100 && !newList.includes('xp_100')) {
+      newList.push('xp_100');
+    }
+    if (nextStreak >= 3 && !newList.includes('streak_3')) {
+      newList.push('streak_3');
+    }
+    if (nextNodes.length >= 1 && !newList.includes('node_explorer')) {
+      newList.push('node_explorer');
+    }
+    const bestStreak = parseInt(localStorage.getItem('socrates_best_consecutive_correct') || '0', 10);
+    if (bestStreak >= 10 && !newList.includes('consecutive_10_correct')) {
+      newList.push('consecutive_10_correct');
+    }
+
+    if (newList.length !== achievements.length) {
+      setAchievements(newList);
+      localStorage.setItem('socrates_unlocked_achievements', JSON.stringify(newList));
+    }
+
     // Update daily XP progress tracking
     const todayD = new Date();
     const dateKey = `${todayD.getFullYear()}-${String(todayD.getMonth() + 1).padStart(2, '0')}-${String(todayD.getDate()).padStart(2, '0')}`;
@@ -513,7 +730,8 @@ export default function App() {
           lastActiveDate: new Date().toISOString(),
           isPremium: isPremium,
           subscriptionType: subscriptionType || undefined,
-          dailyXpGoal: dailyXpGoal
+          dailyXpGoal: dailyXpGoal,
+          achievements: newList
         });
       } catch (err) {
         console.error("Error syncing completed lesson data to Firebase Firestore:", err);
@@ -555,196 +773,94 @@ export default function App() {
 
 
   return (
-    <div className="min-h-screen bg-gray-50/20 text-gray-800 flex flex-col font-sans relative antialiased" dir="rtl">
+    <div className="min-h-screen w-full overflow-x-hidden bg-gray-50/20 text-gray-800 flex flex-col font-sans relative antialiased" dir="rtl">
       
-      {/* Top Universal Progress Header for Smartphone Screens */}
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b-2 border-gray-100 px-4 py-3 md:px-8 shadow-xs flex items-center justify-between flex-row-reverse">
+      {/* Top Universal Progress Header for Screens */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b-2 border-gray-100 px-4 py-3 md:px-8 shadow-sm flex items-center justify-between w-full overflow-hidden select-none">
         
-        {/* Brand/Socrates Title */}
-        <div className="flex items-center gap-2 flex-row-reverse" onClick={triggerVoiceGreeting}>
-          <div className="bg-amber-500 text-white p-2 rounded-xl shadow-xs transition-transform hover:scale-105 active:scale-95 cursor-pointer">
-            <Brain className="w-5 h-5 fill-amber-100" />
-          </div>
-          <div className="text-right">
-            <h1 className="font-extrabold text-sm md:text-base text-gray-800 flex items-center gap-1 flex-row-reverse">
-              سقراط الحكيم
-              <Volume2 className="w-3.5 h-3.5 text-amber-500 cursor-pointer animate-pulse" />
-            </h1>
-            <p className="text-[10px] text-gray-400">تطبيق معارف الثقافة العامة والجدل</p>
-          </div>
+        {/* RIGHT SIDE: Wise Socrates Icon Only */}
+        <div 
+          className="w-11 h-11 bg-[#FDF8EE] rounded-2xl overflow-hidden border-2 border-amber-400 shadow-3xs flex items-center justify-center shrink-0 cursor-pointer select-none transition-transform hover:scale-105 active:scale-95" 
+          onClick={triggerVoiceGreeting} 
+          title="انقر لسماع تفاعلات سقراط الحكيم"
+        >
+          <img src={socratesAppIcon} alt="سقراط" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
         </div>
 
-        {/* Global Stats Trays */}
-        <div className="flex items-center gap-2 sm:gap-3 font-mono">
-          {/* Daily XP Goal Progress Bar */}
-          <div 
-            className="flex flex-col gap-0.5 items-end min-w-[70px] sm:min-w-[125px] bg-amber-500/5 hover:bg-amber-500/10 transition-colors border border-amber-500/10 rounded-xl px-2.5 py-1 text-right select-none cursor-help" 
-            title={`هدفك اليومي: تحقيق ${dailyXpGoal} XP. اليوم أنجزت: ${todayXpEarned} XP`}
-          >
-            <div className="flex justify-between w-full text-[9px] font-black font-sans text-amber-800">
-              <span className="font-mono">{Math.min(100, Math.round((todayXpEarned / dailyXpGoal) * 100))}%</span>
-              <span className="hidden sm:inline">الهدف اليومي</span>
-            </div>
-            <div className="w-full bg-amber-100 rounded-full h-1.5 overflow-hidden border border-amber-200/20">
-              <motion.div 
-                className="bg-gradient-to-l from-amber-500 to-orange-500 h-full rounded-full"
-                initial={{ width: 0 }}
-                animate={{ width: `${Math.min(100, Math.round((todayXpEarned / dailyXpGoal) * 100))}%` }}
-                transition={{ duration: 0.8 }}
-              />
-            </div>
-          </div>
+        {/* LEFT SIDE: Global Stats Trays */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {isPremium ? (
+            <>
+              {/* Unlimited Membership Badge - Elegant & Wider */}
+              <div 
+                onClick={() => setSubscriptionModalOpen(true)}
+                className="hidden sm:flex bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl px-6 sm:px-8 py-1.5 md:py-2 items-center justify-center gap-3 border border-amber-400/30 shadow-xs cursor-pointer select-none active:scale-95 transition-all text-right shrink-0 min-w-[140px] sm:min-w-[160px]"
+                title="إدارة اشتراك سقراط"
+              >
+                <div className="flex flex-col leading-tight">
+                  <span className="text-[9px] font-black text-amber-100">العضوية</span>
+                  <span className="text-[11px] font-black text-white">اللانهاية</span>
+                </div>
+                <span className="text-base font-bold text-white select-none">∞</span>
+              </div>
 
-          {/* XP Badge */}
-          <div className="flex items-center gap-1 bg-amber-50 text-amber-700 font-extrabold px-2 sm:px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs border border-amber-100">
-            <Zap className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-500 fill-amber-500" />
-            <span>{userXp} XP</span>
-          </div>
-
-          {/* Streak Badge with micro-interaction flame flicker or scale pulse */}
-          <motion.div 
-            animate={streakFlicker ? {
-              scale: [1, 1.25, 1.1, 1.2, 1],
-              rotate: [0, -6, 6, -3, 3, 0],
-              boxShadow: ["0px 0px 0px rgba(249, 115, 22, 0)", "0px 0px 14px rgba(249, 115, 22, 0.4)", "0px 0px 4px rgba(249, 115, 22, 0.1)"]
-            } : { scale: 1, rotate: 0 }}
-            transition={{ duration: 1.2, ease: "easeInOut" }}
-            className={`relative flex items-center gap-1.5 ${
-              streakFlicker 
-                ? "bg-gradient-to-r from-orange-500 to-amber-500 text-white border-orange-400" 
-                : "bg-orange-50 text-orange-700 border-orange-100"
-            } font-extrabold px-2 sm:px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs border transition-colors`}
-          >
-            {/* Flame/Flicker Sparkle Particle */}
-            <AnimatePresence>
-              {showFlameBurst && (
-                <>
-                  <motion.span
-                    initial={{ opacity: 0, scale: 0.3, y: 0 }}
-                    animate={{ opacity: 1, scale: 1.3, y: -25 }}
-                    exit={{ opacity: 0, scale: 0.5, y: -45 }}
-                    transition={{ duration: 1.5, ease: "easeOut" }}
-                    className="absolute text-base pointer-events-none"
-                    style={{ left: '20%' }}
-                  >
-                    🔥
-                  </motion.span>
-                  <motion.span
-                    initial={{ opacity: 0, scale: 0.3, y: 0 }}
-                    animate={{ opacity: 0.8, scale: 1.1, y: -30, x: 15 }}
-                    exit={{ opacity: 0, scale: 0.4, y: -40 }}
-                    transition={{ duration: 1.2, delay: 0.2, ease: "easeOut" }}
-                    className="absolute text-[10px] pointer-events-none"
-                    style={{ right: '10%' }}
-                  >
-                    ✨
-                  </motion.span>
-                  <motion.span
-                    initial={{ opacity: 0, scale: 0.3, y: 0 }}
-                    animate={{ opacity: 0.9, scale: 1, y: -28, x: -15 }}
-                    exit={{ opacity: 0, scale: 0.4, y: -38 }}
-                    transition={{ duration: 1.3, delay: 0.1, ease: "easeOut" }}
-                    className="absolute text-xs pointer-events-none"
-                    style={{ left: '10%' }}
-                  >
-                    ⚡
-                  </motion.span>
-                </>
-              )}
-            </AnimatePresence>
-
-            {/* Flickering Flame Icon or pulsing icon */}
-            <motion.div
-              animate={streakFlicker || streak > 0 ? {
-                scale: [1, 1.15, 0.95, 1.05, 1],
-              } : {}}
-              transition={{ 
-                repeat: streakFlicker ? 0 : Infinity, 
-                repeatType: "reverse", 
-                duration: streakFlicker ? 0.8 : 3, 
-                ease: "easeInOut" 
-              }}
-              className="relative flex items-center justify-center"
+              <div 
+                onClick={() => setSubscriptionModalOpen(true)}
+                className="flex sm:hidden bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl px-4 py-1.5 items-center justify-center gap-1 border border-amber-400/30 shadow-3xs cursor-pointer shrink-0 min-w-[100px]"
+                title="إدارة اشتراك سقراط"
+              >
+                <span className="text-[11px] font-black leading-none">اللانهائية ∞</span>
+              </div>
+            </>
+          ) : (
+            /* Hearts Tracker Badge - Shown for non-premium to track their 5 hearts */
+            <div 
+              onClick={handleRefillHearts}
+              className="flex bg-[#FFF5F5] hover:bg-rose-50 border border-rose-200/60 rounded-2xl px-3 sm:px-4 py-1 md:py-1.5 items-center justify-center gap-2 shadow-xs cursor-pointer select-none active:scale-95 transition-all shrink-0 min-w-[70px] sm:min-w-[85px] text-right"
+              title="انقر لإعادة ملء القلوب لـ 5 قلوب كاملاً 💖"
             >
-              <Flame className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
-                streakFlicker ? "text-white fill-amber-100" : "text-orange-500 fill-orange-500 animate-pulse"
-              }`} />
-            </motion.div>
-            
-            <span>{streak} ي</span>
-          </motion.div>
-
-          {/* Hearts Status */}
-          <div 
-            onClick={() => {
-              playClickSound();
-              if (isPremium) {
-                setSubscriptionModalOpen(true);
-              } else {
-                handleRefillHearts();
-              }
-            }}
-            className={`flex items-center gap-1.5 ${
-              isPremium 
-                ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white border-amber-400 hover:from-amber-600 hover:to-orange-600" 
-                : "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-100"
-            } px-2 sm:px-3 py-1.5 rounded-xl text-xs md:text-sm shadow-2xs cursor-pointer transition-colors active:scale-95 border`}
-            title={isPremium ? "أنت في العضوية الحكيمة الفائقة - اضغط لإدارة باقة سقراط بلس" : "انقر لإعادة ملء القلوب"}
-          >
-            {isPremium ? (
-              <>
-                <Crown className="w-3.5 h-3.5 text-amber-100 fill-amber-100/50" />
-                <span className="font-extrabold">لانهائي ∞</span>
-              </>
-            ) : (
-              <>
-                <Heart className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-500 fill-rose-500" />
-                <span className="font-bold">{hearts}/5</span>
-              </>
-            )}
-          </div>
-
-          {/* Cloud Integration Status / Authentication Button */}
-          {currentUser ? (
-            <div className="flex items-center gap-1 sm:gap-2">
-              {isSyncing ? (
-                <div className="flex items-center justify-center p-1.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 animate-pulse" title="جاري رفع البيانات تلقائياً لسحابة غوغل...">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                </div>
-              ) : (
-                <div className="hidden sm:flex items-center gap-1 text-[10px] text-emerald-600 bg-emerald-50 px-2 py-1.5 rounded-xl border border-emerald-100 font-bold" title="تم حفظ كامل تقدمك بالكامل في Firestore">
-                  <UserCheck className="w-3.5 h-3.5 text-emerald-500" />
-                  <span className="hidden md:inline">محفوظ سحابياً</span>
-                </div>
-              )}
-              
-              <div className="flex items-center gap-1">
-                <div className="hidden lg:flex flex-col text-right leading-none mr-1">
-                  <span className="text-[10px] font-black text-gray-700 max-w-[80px] truncate">{currentUser.displayName || 'طالب علم'}</span>
-                  <span className="text-[8px] text-emerald-600 font-sans">مزامنة سحابية</span>
-                </div>
-                <button 
-                  onClick={handleLogout}
-                  title="تسجيل الخروج"
-                  className="p-1.5 rounded-xl bg-gray-50 text-gray-500 hover:text-rose-600 hover:bg-rose-50 border border-gray-200 transition-colors cursor-pointer"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
+              <Heart className="w-4 h-4 text-rose-500 fill-rose-500 animate-pulse shrink-0" />
+              <div className="flex flex-col leading-none items-center">
+                <span className="font-extrabold text-xs sm:text-sm text-rose-700 font-sans leading-none">{hearts}</span>
+                <span className="text-[8px] text-rose-500 font-black leading-none mt-1">قلوب</span>
               </div>
             </div>
-          ) : (
-            <button
-              onClick={() => {
-                playClickSound();
-                setAuthModalOpen(true);
-              }}
-              title="سجل دخولك لحفظ درجاتك في السحابة"
-              className="flex items-center gap-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 hover:scale-[1.02] active:scale-[0.98] text-white font-black px-2.5 py-1.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer border border-amber-500/20"
-            >
-              <LogIn className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">حفظ السحابي</span>
-            </button>
           )}
+
+          {/* XP Badge */}
+          <div className="flex flex-col items-center justify-center bg-[#FDF8EE] hover:bg-amber-50 border border-amber-200/60 rounded-2xl px-2.5 sm:px-3.5 py-1 text-center min-w-[50px] sm:min-w-[60px] cursor-help select-none shrink-0" title={`نقاط الخبرة الكلية: ${userXp} XP - اليوم: ${todayXpEarned} XP`}>
+            <span className="font-black text-xs sm:text-sm text-amber-800 font-mono leading-none">{userXp}</span>
+            <span className="text-[9px] text-amber-600 font-black leading-none mt-1">XP</span>
+          </div>
+
+          {/* Elegant Snapchat-style Streak Badge */}
+          <div 
+            className="flex flex-col items-center justify-center bg-[#FCF5F2] hover:bg-orange-50 border border-orange-200/60 rounded-2xl px-2.5 sm:px-3.5 py-1 text-center min-w-[50px] sm:min-w-[60px] cursor-pointer select-none shrink-0 relative"
+            onClick={() => {
+              playClickSound();
+              setShowFlameBurst(true);
+              setTimeout(() => setShowFlameBurst(false), 1500);
+            }}
+          >
+            <AnimatePresence>
+              {showFlameBurst && (
+                <motion.span
+                  initial={{ opacity: 0, scale: 0.5, y: 0 }}
+                  animate={{ opacity: [0, 1, 0], scale: 1.4, y: -15 }}
+                  transition={{ duration: 0.8 }}
+                  className="absolute text-xs pointer-events-none top-0"
+                >
+                  ✨
+                </motion.span>
+              )}
+            </AnimatePresence>
+            <div className="flex items-center gap-0.5 justify-center leading-none">
+              <span className="text-xs sm:text-sm">🔥</span>
+              <span className="font-black text-xs sm:text-sm text-orange-700 font-sans">{streak}</span>
+            </div>
+            <span className="text-[9px] text-orange-500 font-black leading-none mt-1">يوم</span>
+          </div>
+
         </div>
       </header>
 
@@ -813,9 +929,10 @@ export default function App() {
               }`}
             >
               <div className="flex items-center gap-2.5 flex-row-reverse">
-                <Calendar className="w-4 h-4" />
-                <span>نشاطي الأسبوعي</span>
+                <Brain className="w-4 h-4" />
+                <span>منشئ الخرائط (دراسة مفهوم)</span>
               </div>
+              <span className="bg-emerald-100 text-emerald-800 text-[10px] py-0.5 px-2 rounded-full font-sans">جديد</span>
             </button>
 
             <button
@@ -846,6 +963,22 @@ export default function App() {
                 <span>حقيبة فلوتر للمطور</span>
               </div>
             </button>
+
+            {currentUser?.email === 'khaledany333@gmail.com' && (
+              <button
+                onClick={() => handleTabChange('admin')}
+                className={`w-full py-3.5 px-4 rounded-xl font-black text-sm flex items-center justify-between flex-row-reverse transition-all active:scale-[0.98] ${
+                  activeTab === 'admin'
+                    ? 'bg-purple-600 text-white shadow-[0_4px_0_0_#4c1d95]'
+                    : 'text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 flex-row-reverse font-sans">
+                  <ShieldCheck className="w-4 h-4 text-purple-600 group-hover:text-purple-800" />
+                  <span>لوحة تحكم الأدمن 👑</span>
+                </div>
+              </button>
+            )}
           </div>
 
           {/* Dynamic Cloud Registration Slot */}
@@ -908,23 +1041,16 @@ export default function App() {
                   <div className="bg-amber-100 text-amber-700 font-extrabold text-[9px] px-2.5 py-1 rounded-full border border-amber-200 flex items-center gap-1">
                     <span>👑 سقراط بلس نشط</span>
                   </div>
-                  <Crown className="w-5 h-5 text-amber-500 fill-amber-300/60" />
+                  <Crown className="w-5 h-5 text-amber-500 fill-amber-500" />
                 </div>
-                <p className="text-[11px] text-amber-900 font-bold leading-relaxed">أنت الآن في الباقة {subscriptionType === 'monthly' ? 'الشهرية' : 'السنوية'} الممتازة.</p>
-                <button
-                  type="button"
-                  onClick={handleCancelPremium}
-                  className="mt-3 w-full bg-white/65 hover:bg-rose-50 text-[10px] text-gray-500 hover:text-rose-600 border border-gray-200 rounded-xl py-1.5 font-bold transition-all cursor-pointer"
-                >
-                  إلغاء الاشتراك الافتراضي ✕
-                </button>
+                <p className="text-[10px] text-gray-500 leading-relaxed font-bold">كل قنوات المعرفة وتفكيك المناهج متاحة لك بلا حدود عقلي أو مادي.</p>
               </div>
             ) : (
               <div className="bg-gradient-to-br from-amber-50 to-orange-50/20 rounded-2xl border-2 border-amber-200/60 p-4 shadow-sm space-y-2 text-center">
                 <div className="flex justify-center text-xl">👑</div>
                 <h4 className="font-extrabold text-xs text-amber-800">اشترك في سقراط بلس!</h4>
                 <p className="text-[10px] text-amber-950/75 leading-relaxed">
-                  افتح قلوباً لا نهائية وميزة تفكيك المناهج السحابية للكتب المدرسية تلقائياً مجاناً %100!
+                  افتح قلوباً لا نهائية وميزة تفكيك المناهج السحابية للكتب المدرسية تلقائياً بلا قيود!
                 </p>
                 <button
                   type="button"
@@ -934,7 +1060,7 @@ export default function App() {
                   }}
                   className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 transition-all text-white font-black py-2.5 rounded-xl text-xs shadow-md shadow-amber-500/15 cursor-pointer"
                 >
-                  تفعيل مجاني كامل 👑
+                  تفعيل عِنان الحكمة 👑
                 </button>
               </div>
             )}
@@ -957,7 +1083,11 @@ export default function App() {
             isPremium ? (
               <TextbookConverter 
                 onInjectNode={handleInjectNode} 
-                alreadyInjected={nodes.some(n => n.id === 'custom_textbook_node')}
+                alreadyInjected={false}
+                currentUser={currentUser}
+                nodes={nodes}
+                onDeleteBook={handleDeleteBook}
+                onOpenAuth={() => setAuthModalOpen(true)}
               />
             ) : (
               <div className="bg-white rounded-3xl border-2 border-gray-150 p-6 md:p-8 shadow-xs text-center space-y-6 max-w-xl mx-auto" dir="rtl">
@@ -965,17 +1095,10 @@ export default function App() {
                   👑
                 </div>
                 <div className="space-y-2">
-                  <h3 className="text-lg md:text-xl font-extrabold text-gray-800">تحليل وتفكيك الكتب ميزة للمشتركين فقط 👑</h3>
-                  <p className="text-xs md:text-sm text-gray-500 leading-relaxed max-w-md mx-auto">
-                    ميزة <strong>تحليل الكتب المدرسية والـ PDFs وتحويلها لفصول وشروحات تفاعلية ذكية</strong> هي جزء من اشتراك "سقراط بلس".
+                  <h3 className="text-lg md:text-xl font-extrabold text-gray-800">تفتيت وتحليل الكتب المدرسية (المناهج)</h3>
+                  <p className="text-xs text-gray-500 leading-relaxed max-w-md mx-auto">
+                    ارفع أي كتاب مدرسي بصيغة PDF وسيتولى الذكاء الاصطناعي تفصيل فصوله وأبوابه إلى خرائط دراسية سقراطية تفاعلية مذهلة! هذه الميزة حصرية للأعضاء المميزين.
                   </p>
-                </div>
-
-                <div className="bg-amber-50/50 border border-amber-200/50 p-4 rounded-2xl flex items-center gap-3 text-right">
-                  <div className="text-lg">🎁</div>
-                  <div className="text-[11px] text-amber-900 leading-relaxed font-bold">
-                    <strong>تفعيل فوري مجاني:</strong> يمكنك الاشتراك بالباقة الشهرية أو السنوية مجاناً تماماً %100 والبدء الفوري بتحليل مناهجك السحابية. لا يتطلب منك دفع أي مبالغ مالية!
-                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 pt-2">
@@ -1000,7 +1123,7 @@ export default function App() {
                   className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black py-3 rounded-2xl text-xs sm:text-sm shadow-md shadow-amber-500/15 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2"
                 >
                   <Crown className="w-4 h-4 text-amber-200 fill-amber-200" />
-                  <span>انضم إلى سقراط بلس وافتح ميزات المناهج مجاناً ↗</span>
+                  <span>انضم إلى سقراط بلس وافتح ميزات المناهج ↗</span>
                 </button>
               </div>
             )
@@ -1015,10 +1138,44 @@ export default function App() {
           )}
 
           {activeTab === 'progress' && (
-            <ProgressCharts 
-              activityData={weeklyActivity} 
-              totalXp={userXp} 
-              streak={streak} 
+            <ConceptConverter 
+              onInjectNode={handleInjectNode}
+              currentUser={currentUser}
+              nodes={nodes}
+              onDeleteBook={handleDeleteBook}
+              onOpenAuth={() => setAuthModalOpen(true)}
+              isPremium={isPremium}
+              hasUsedFreeSmartPath={hasUsedFreeSmartPath}
+              onOpenSubscription={() => setSubscriptionModalOpen(true)}
+              onGenerationSuccess={async () => {
+                setHasUsedFreeSmartPath(true);
+                localStorage.setItem('socrates_has_used_free_smartpath', 'true');
+                if (currentUser) {
+                  setIsSyncing(true);
+                  try {
+                    await saveUserProgress(currentUser.uid, {
+                      hearts,
+                      streak,
+                      xp: userXp,
+                      currentNodeId,
+                      currentLessonId: '',
+                      completedLessons,
+                      completedNodes,
+                      weeklyActivity,
+                      league: 'Bronze',
+                      lastActiveDate: new Date().toISOString(),
+                      isPremium,
+                      hasUsedFreeSmartPath: true,
+                      dailyXpGoal,
+                      achievements
+                    });
+                  } catch (err) {
+                    console.error("Error saving hasUsedFreeSmartPath progress to Firestore:", err);
+                  } finally {
+                    setIsSyncing(false);
+                  }
+                }
+              }}
             />
           )}
 
@@ -1031,12 +1188,44 @@ export default function App() {
               completedLessons={completedLessons}
               completedNodes={completedNodes}
               weeklyActivity={weeklyActivity}
+              achievements={achievements}
+              isPremium={isPremium}
               onProgressUpdated={(updates) => {
+                const nextXp = updates.xp !== undefined ? updates.xp : userXp;
+                const nextHearts = updates.hearts !== undefined ? updates.hearts : hearts;
+                const nextStreak = updates.streak !== undefined ? updates.streak : streak;
+                const nextLessons = updates.completedLessons !== undefined ? updates.completedLessons : completedLessons;
+                const nextNodes = updates.completedNodes !== undefined ? updates.completedNodes : completedNodes;
+                const nextAchievements = updates.achievements !== undefined ? updates.achievements : achievements;
+
                 if (updates.xp !== undefined) setUserXp(updates.xp);
                 if (updates.hearts !== undefined) setHearts(updates.hearts);
                 if (updates.streak !== undefined) setStreak(updates.streak);
                 if (updates.completedLessons !== undefined) setCompletedLessons(updates.completedLessons);
                 if (updates.completedNodes !== undefined) setCompletedNodes(updates.completedNodes);
+                if (updates.achievements !== undefined) {
+                  setAchievements(updates.achievements);
+                  localStorage.setItem('socrates_unlocked_achievements', JSON.stringify(updates.achievements));
+                }
+
+                if (currentUser) {
+                  saveUserProgress(currentUser.uid, {
+                    hearts: nextHearts,
+                    streak: nextStreak,
+                    xp: nextXp,
+                    currentNodeId,
+                    currentLessonId: '',
+                    completedLessons: nextLessons,
+                    completedNodes: nextNodes,
+                    weeklyActivity,
+                    league: 'Bronze',
+                    lastActiveDate: new Date().toISOString(),
+                    isPremium: isPremium,
+                    subscriptionType: subscriptionType || undefined,
+                    dailyXpGoal: dailyXpGoal,
+                    achievements: nextAchievements
+                  }).catch(err => console.error("Error syncing progress updates to Firestore:", err));
+                }
               }}
               onOpenAuth={() => {
                 setAuthModalOpen(true);
@@ -1076,6 +1265,10 @@ export default function App() {
 
           {activeTab === 'docs' && (
             <TechDocs />
+          )}
+
+          {activeTab === 'admin' && (
+            <AdminDashboard onBackToMap={() => handleTabChange('map')} />
           )}
         </main>
       </div>
@@ -1119,8 +1312,8 @@ export default function App() {
               activeTab === 'progress' ? 'text-amber-500 font-black scale-105' : 'text-gray-400'
             }`}
           >
-            <Calendar className="w-5 h-5" />
-            <span>نشاطي</span>
+            <Brain className="w-5 h-5" />
+            <span>مسار ذكي</span>
           </button>
 
           <button
@@ -1132,6 +1325,18 @@ export default function App() {
             <UserIcon className="w-5 h-5" />
             <span>حسابي</span>
           </button>
+
+          {currentUser?.email === 'khaledany333@gmail.com' && (
+            <button
+              onClick={() => handleTabChange('admin')}
+              className={`flex-1 flex flex-col items-center justify-center gap-1 py-0.5 rounded-xl transition-all ${
+                activeTab === 'admin' ? 'text-purple-600 font-black scale-105' : 'text-gray-400'
+              }`}
+            >
+              <ShieldCheck className="w-5 h-5" />
+              <span>الأدمن</span>
+            </button>
+          )}
         </div>
       </nav>
 
@@ -1157,6 +1362,126 @@ export default function App() {
             onClose={() => setSubscriptionModalOpen(false)}
             onActivate={handleActivatePremium}
           />
+        )}
+
+        {showStreakWarning && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-xs text-right animate-fade-in" dir="rtl">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="bg-white rounded-3xl p-6 max-w-sm w-full border-2 border-orange-200 shadow-2xl space-y-4 text-center relative overflow-hidden"
+            >
+              {/* Decorative top orange bar */}
+              <div className="absolute top-0 left-0 right-0 h-2.5 bg-gradient-to-r from-orange-400 via-amber-500 to-orange-550 animate-pulse" />
+              
+              <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mx-auto border-2 border-orange-100 relative mt-2 animate-bounce">
+                <Flame className="w-9 h-9 text-orange-500 fill-orange-500" />
+                <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full border border-white">
+                  تنبيه!
+                </span>
+              </div>
+
+              <div className="space-y-1">
+                <h3 className="text-base font-black text-slate-800 leading-tight">
+                  الـ Streak على وشك الانتهاء اليوم! 🔥
+                </h3>
+                <p className="text-xs text-gray-400 font-bold">
+                  سلسلة أيامك الحالية: {streak} {streak === 1 ? 'يوم واحد' : streak === 2 ? 'يومين متتاليين' : `${streak} أيام`} ✨
+                </p>
+              </div>
+
+              <div className="bg-amber-50/55 border border-amber-100/70 p-3.5 rounded-2xl text-[11px] text-amber-900 leading-relaxed text-right font-medium">
+                تنبّه يا حكيم! لقد بقيت متواصلاً لـ <strong>{streak}</strong> {streak === 1 ? 'يوم' : 'أيام'} دون انقطاع، ولكنك لم تكسب أي نقاط خبرة (XP) اليوم بعد.
+                <div className="mt-1.5 font-bold text-orange-850">
+                  ⚠️ إذا لم تدرس اليوم، ستفقد هذه السلسلة المتتالية الفريدة غداً!
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setShowStreakWarning(false);
+                    setActiveTab('map');
+                  }}
+                  className="w-full bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-black py-2.5 rounded-xl text-xs transition-all shadow-md shadow-orange-500/10 cursor-pointer"
+                >
+                  افتح الخريطة وابدأ الدرس الآن 🧠
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    playClickSound();
+                    setShowStreakWarning(false);
+                  }}
+                  className="w-full bg-slate-105 hover:bg-slate-200 text-gray-700 font-bold py-2 rounded-xl text-xs transition-all cursor-pointer"
+                >
+                  فهمت، سأحافظ على الشعلة لاحقاً 👍
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {stripeVerificationState !== 'idle' && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md text-right" dir="rtl">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              className="bg-white rounded-3xl p-6 max-w-md w-full border-2 border-amber-250 shadow-2xl space-y-5 text-center"
+            >
+              {stripeVerificationState === 'verifying' && (
+                <div className="space-y-4 py-6">
+                  <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center text-3xl animate-spin mx-auto">
+                    🌀
+                  </div>
+                  <h3 className="text-lg font-black text-gray-900">جاري تأكيد عملية الدفع...</h3>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    نقوم بالاتصال الآمن ببوابة Stripe للتحقق من العضوية الحكيمة. نرجو عدم إغلاق المتصفّح.
+                  </p>
+                </div>
+              )}
+
+              {stripeVerificationState === 'success' && (
+                <div className="space-y-4 py-4">
+                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center text-3xl animate-bounce mx-auto">
+                    👑
+                  </div>
+                  <h3 className="text-lg font-black text-emerald-800">مبارك عليكم سقراط بلس!</h3>
+                  <p className="text-xs text-emerald-600 leading-relaxed">
+                    تم التحقق من عملية الشراء وتفعيل باقة اشتراكك الممتازة بنجاح!
+                  </p>
+                  <button
+                    onClick={() => setStripeVerificationState('idle')}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer"
+                  >
+                    دخول مجالس الحكماء 🏛️
+                  </button>
+                </div>
+              )}
+
+              {stripeVerificationState === 'failure' && (
+                <div className="space-y-4 py-4">
+                  <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center text-3xl mx-auto">
+                    ❌
+                  </div>
+                  <h3 className="text-lg font-black text-rose-800">فشل التحقق من الدفع</h3>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    لم يكتمل تأكيد المعاملة من خوادم Stripe. إذا تم خصم المبلغ أو واجهت مشكلة، يرجى تشغيل التفعيل الفوري مجانًا، وسيرتقي حسابك فورًا!
+                  </p>
+                  <button
+                    onClick={() => setStripeVerificationState('idle')}
+                    className="w-full bg-gray-950 hover:bg-gray-800 text-white font-black py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer"
+                  >
+                    إغلاق ومتابعة
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

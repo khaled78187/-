@@ -21,9 +21,20 @@ import { SkillNode } from '../types';
 interface TextbookConverterProps {
   onInjectNode: (node: SkillNode) => void;
   alreadyInjected: boolean;
+  currentUser: any;
+  nodes: SkillNode[];
+  onDeleteBook: (bookId: string) => Promise<void>;
+  onOpenAuth: () => void;
 }
 
-export default function TextbookConverter({ onInjectNode, alreadyInjected }: TextbookConverterProps) {
+export default function TextbookConverter({ 
+  onInjectNode, 
+  alreadyInjected,
+  currentUser,
+  nodes,
+  onDeleteBook,
+  onOpenAuth
+}: TextbookConverterProps) {
   const [bookTitle, setBookTitle] = useState<string>('فيزياء الصف العاشر.pdf');
   const [customText, setCustomText] = useState<string>('');
   
@@ -36,9 +47,12 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
   const [copiedNotification, setCopiedNotification] = useState(false);
   const [injectedNotification, setInjectedNotification] = useState(false);
 
-  // File Upload State
+  // File Upload and Text Extraction States
   const [dragActive, setDragActive] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [extractedPdfText, setExtractedPdfText] = useState<string>("");
+  const [isExtractingPdf, setIsExtractingPdf] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
 
   // Generated dynamic curriculum state
   const [generatedNode, setGeneratedNode] = useState<SkillNode | null>(null);
@@ -47,51 +61,163 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
   const ANALYSIS_STEPS = [
     "قراءة وفهرسة صفحات المنهج واستخراج هيكل المخطوطة التعليمية...",
     "استخلاص وتلخيص أطروحات المنهج وصياغة الركائز والمفاهيم الأساسية...",
-    "تقسيم المجلد التعليمي إلى 5 مستويات تدرجية (من الأساسيات إلى التقدم المعرفي)...",
-    "توليد 10 حزم تفاعلية لكل مستوى (صحيح وخطأ، خيارات متعددة، وتوجيهات)...",
+    "تقسيم المجلد التعليمي إلى مستويات تدرجية (من الأساسيات إلى التقدم المعرفي)...",
+    "توليد حزم تفاعلية لكل مستوى (صحيح وخطأ، خيارات متعددة، وتوجيهات)...",
     "صياغة وهندسة كود الـ JSON المتكامل والمطابق تماماً لنظام السند بقواعد بيانات سقراط..."
   ];
 
-  // Run simulated AI analysis
-  const handleStartAnalysis = () => {
+  const [infoBanner, setInfoBanner] = useState<string | null>(null);
+
+  // Load PDF.js from CDN dynamically on demand
+  const loadPdfjs = (): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if ((window as any).pdfjsLib) {
+        resolve((window as any).pdfjsLib);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
+      script.onload = () => {
+        const pdfjs = (window as any).pdfjsLib;
+        // Correctly initialize worker
+        pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        resolve(pdfjs);
+      };
+      script.onerror = () => reject(new Error("حدث خطأ أثناء الاتصال بمكتبة تحليل ملفات PDF الفنية."));
+      document.head.appendChild(script);
+    });
+  };
+
+  // Perform client-side PDF text extraction to read actual textbook chapters
+  const handleProcessPdfFile = async (file: File) => {
+    setIsExtractingPdf(true);
+    setExtractionError(null);
+    setExtractedPdfText("");
+    const friendlyName = file.name.replace(/\.[^/.]+$/, "");
+    setBookTitle(friendlyName);
+    setUploadedFileName(file.name);
+
+    try {
+      const pdfjs = await loadPdfjs();
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      
+      let fullText = "";
+      const totalPages = pdf.numPages;
+      // Read a rich sample of up to 45 pages to extract headers, tables of content, and deep passages
+      const pagesToRead = Math.min(totalPages, 45);
+      
+      for (let i = 1; i <= pagesToRead; i++) {
+        try {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map((item: any) => item.str).join(" ");
+          fullText += pageText + "\n";
+        } catch (pageErr) {
+          console.warn(`Failed to parse page ${i}`, pageErr);
+        }
+      }
+      
+      const cleanedText = fullText.trim();
+      if (cleanedText.length === 0) {
+        throw new Error("لم نجد نصوصاً قابلة للقراءة في هذا الكتاب المرفق (قد يكون ملف صور ممسوحة ضوئياً فقط دون طبقة نصوص).");
+      }
+      
+      setExtractedPdfText(cleanedText);
+    } catch (err: any) {
+      console.warn("PDF parsing failed client-side, proceeding with title-based analysis fallback:", err);
+      setExtractionError(err?.message || "تعذر استخراج النصوص والكلمات من هذا الملف. سنقوم بتحليله بالكامل اعتماداً على عناوينه وتخمين هيكله المعرفي.");
+    } finally {
+      setIsExtractingPdf(false);
+    }
+  };
+
+  // Run real AI analysis using Gemini SDK on the backend
+  const handleStartAnalysis = async () => {
     setIsAnalyzing(true);
     setAnalysisCompleted(false);
     setAnalysisProgress(0);
+    setInfoBanner(null);
     setCurrentStepText(ANALYSIS_STEPS[0]);
 
-    const finalTitle = uploadedFileName || bookTitle || "كتاب مخصص";
-    const { node, plans } = generateDynamicBookNode(finalTitle, customText);
-    setGeneratedNode(node);
-    setGeneratedPlans(plans);
-  };
+    const finalTitle = bookTitle || uploadedFileName || "كتاب مخصص";
+    const finalPayloadText = customText || extractedPdfText;
 
-  useEffect(() => {
-    let timer: any;
-    if (isAnalyzing) {
-      const stepDuration = 2000; 
-      const totalSteps = ANALYSIS_STEPS.length;
+    // Start a visual timer for loading percentage
+    let simulatedProgress = 0;
+    const progressInterval = setInterval(() => {
+      simulatedProgress += 1;
+      if (simulatedProgress < 95) {
+        setAnalysisProgress(simulatedProgress);
+        const stepIndex = Math.min(
+          Math.floor((simulatedProgress / 100) * ANALYSIS_STEPS.length),
+          ANALYSIS_STEPS.length - 1
+        );
+        setCurrentStepText(ANALYSIS_STEPS[stepIndex]);
+      }
+    }, 150);
+
+    try {
+      const response = await fetch("/api/gemini/analyze-textbook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookTitle: finalTitle, customText: finalPayloadText }),
+      });
+
+      clearInterval(progressInterval);
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData?.error || "Failed API call");
+      }
+
+      const data = await response.json();
       
-      timer = setInterval(() => {
-        setAnalysisProgress(prev => {
-          const nextVal = prev + (100 / (totalSteps * 4)); 
-          const currentStepIndex = Math.floor((nextVal / 100) * totalSteps);
-          
-          if (currentStepIndex < totalSteps) {
-            setCurrentStepText(ANALYSIS_STEPS[currentStepIndex]);
-          }
+      // Assign a unique ID to the generated node and lessons so they don't overwrite each other
+      const uniqueId = `custom_book_${Date.now()}`;
+      const nodeWithUniqueId: SkillNode = {
+        ...data.node,
+        id: uniqueId,
+        lessons: data.node.lessons.map((lesson: any, i: number) => ({
+          ...lesson,
+          id: `textbook_level_${uniqueId}_${i + 1}`
+        }))
+      };
 
-          if (nextVal >= 100) {
-            clearInterval(timer);
-            setIsAnalyzing(false);
-            setAnalysisCompleted(true);
-            return 100;
-          }
-          return nextVal;
-        });
-      }, 500);
+      setGeneratedNode(nodeWithUniqueId);
+      setGeneratedPlans(data.plans);
+      
+      // Complete progress smoothly
+      setAnalysisProgress(100);
+      setIsAnalyzing(false);
+      setAnalysisCompleted(true);
+      setInfoBanner("تم تحليل كتابك بنجاح وبناء المنهج وصياغة مستوياته وأسئلته بدقة تامة عبر ذكاء اصطناعي جيمناي (Gemini AI)! 🚀");
+    } catch (err: any) {
+      console.warn("Real Gemini analysis is currently offline or unconfigured. Triggering local backup generation gracefully...", err);
+      clearInterval(progressInterval);
+
+      // Graceful local backup fallback
+      const { node, plans } = generateDynamicBookNode(finalTitle, finalPayloadText);
+      const uniqueId = `custom_book_${Date.now()}`;
+      const nodeWithUniqueId: SkillNode = {
+        ...node,
+        id: uniqueId,
+        lessons: node.lessons.map((lesson: any, i: number) => ({
+          ...lesson,
+          id: `textbook_level_${uniqueId}_${i + 1}`
+        }))
+      };
+
+      setGeneratedNode(nodeWithUniqueId);
+      setGeneratedPlans(plans);
+      
+      setAnalysisProgress(100);
+      setIsAnalyzing(false);
+      setAnalysisCompleted(true);
+      setInfoBanner("تم استخدام التوليد المعرفي الذكي السريع للتشغيل، تفحص وصمم ما تريد! 💡 (لتحليل نصوص كتابك الفعلي عبر جيمناي، يرجى ملء مفتاح GEMINI_API_KEY في الإعدادات)");
     }
-    return () => clearInterval(timer);
-  }, [isAnalyzing]);
+  };
 
   // Copy full JSON to Clipboard
   const handleCopyJson = () => {
@@ -133,8 +259,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        setUploadedFileName(file.name);
-        setBookTitle(file.name);
+        handleProcessPdfFile(file);
       } else {
         alert("يرجى رفع ملف بصيغة PDF فقط رعايةً لقواعد الأنظمة العلمية.");
       }
@@ -144,8 +269,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      setUploadedFileName(file.name);
-      setBookTitle(file.name);
+      handleProcessPdfFile(file);
     }
   };
 
@@ -160,7 +284,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
           </div>
           <div>
             <h2 className="text-xl md:text-2xl font-black text-gray-800">تحليل وتوليد المناهج الدراسية الخاصة بك</h2>
-            <p className="text-xs text-gray-500 mt-1">ارفع أي كتاب مدرسي مخصص بصيغة PDF وسيقوم ذكاء سقراط بتفكيكه لـ 5 مستويات علمية و50 سؤالاً تفاعلياً للفور</p>
+            <p className="text-xs text-gray-500 mt-1">ارفع أي كتاب مدرسي مخصص بصيغة PDF وسيقوم ذكاء سقراط بتفكيكه وتحليله وتصميم فصل ومستوى دراسي تفاعلي لكل وحدة من وحدات الكتاب الحقيقية!</p>
           </div>
         </div>
         
@@ -181,125 +305,248 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
-            className="grid grid-cols-1 md:grid-cols-3 gap-6"
+            className="space-y-8"
           >
-            {/* Textbook Inputs */}
-            <div className="md:col-span-2 space-y-5">
-              <label className="text-xs font-black text-gray-400 block uppercase tracking-wide">بيانات ترويح وتحميل كتابك المدرسي:</label>
-              
-              <div className="space-y-4">
-                {/* Book Title Input Field */}
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-black text-gray-400 block">اسم أو عنوان الكتاب المدرسي:</label>
-                  <input 
-                    type="text"
-                    value={bookTitle}
-                    onChange={(e) => setBookTitle(e.target.value)}
-                    placeholder="امسح واكتب تاريخ الأندلس، أو كيمياء الصف العاشر، أو أساسيات جافا..."
-                    className="w-full rounded-2xl border-2 border-gray-100 p-3.5 text-xs font-sans text-right focus:border-amber-400 outline-hidden focus:ring-0 leading-relaxed text-gray-700 font-bold"
-                  />
-                </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Textbook Inputs */}
+              <div className="md:col-span-2 space-y-5">
+                <label className="text-xs font-black text-gray-400 block uppercase tracking-wide">بيانات ترويح وتحميل كتابك المدرسي:</label>
+                
+                <div className="space-y-4">
+                  {/* Book Title Input Field */}
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-black text-gray-400 block">اسم أو عنوان الكتاب المدرسي:</label>
+                    <input 
+                      type="text"
+                      value={bookTitle}
+                      onChange={(e) => setBookTitle(e.target.value)}
+                      placeholder="امسح واكتب تاريخ الأندلس، أو كيمياء الصف العاشر، أو أساسيات جافا..."
+                      className="w-full rounded-2xl border-2 border-gray-100 p-3.5 text-xs font-sans text-right focus:border-amber-400 outline-hidden focus:ring-0 leading-relaxed text-gray-700 font-bold"
+                    />
+                  </div>
 
-                {/* File Upload Area */}
-                <div 
-                  onDragEnter={handleDrag}
-                  onDragOver={handleDrag}
-                  onDragLeave={handleDrag}
-                  onDrop={handleDrop}
-                  className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all relative ${
-                    dragActive ? 'border-amber-500 bg-amber-50/10' : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <input 
-                    type="file" 
-                    id="pdf-upload" 
-                    accept=".pdf" 
-                    onChange={handleFileInputChange}
-                    className="hidden" 
-                  />
-                  
-                  <label htmlFor="pdf-upload" className="cursor-pointer flex flex-col items-center gap-2">
-                    <div className="p-3 bg-gray-50 rounded-full text-gray-400 border border-gray-100">
-                      <UploadCloud className="w-6 h-6" />
+                  {/* File Upload Area */}
+                  <div 
+                    onDragEnter={handleDrag}
+                    onDragOver={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all relative ${
+                      dragActive ? 'border-amber-500 bg-amber-50/10' : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <input 
+                      type="file" 
+                      id="pdf-upload" 
+                      accept=".pdf" 
+                      onChange={handleFileInputChange}
+                      disabled={isExtractingPdf}
+                      className="hidden" 
+                    />
+                    
+                    <label htmlFor="pdf-upload" className={`flex flex-col items-center gap-2 ${isExtractingPdf ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                      {isExtractingPdf ? (
+                        <div className="flex flex-col items-center gap-2 py-2">
+                          <RefreshCw className="w-8 h-8 animate-spin text-amber-500" />
+                          <p className="text-xs font-bold text-amber-600">جاري قراءة واستخراج نصوص كتابك المدرسي بدقة...</p>
+                          <p className="text-[10px] text-gray-400">نقوم بفهرسة صفحات المادة وتصفيتها لمطابقتها للذكاء الاصطناعي...</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="p-3 bg-gray-50 rounded-full text-gray-400 border border-gray-100">
+                            <UploadCloud className="w-6 h-6" />
+                          </div>
+                          {uploadedFileName ? (
+                            <div>
+                              <p className="text-xs font-bold text-amber-600 flex items-center gap-1 justify-center">
+                                <span>{uploadedFileName}</span>
+                                <span className="text-emerald-500">✓ جاهز للتحليـل</span>
+                              </p>
+                              {extractedPdfText && <p className="text-[9px] text-emerald-600 font-bold mt-1">✓ تم استخراج {extractedPdfText.split(/\s+/).length} كلمة بنجاح للتحليل الفيلسوفي الدقيق</p>}
+                              <p className="text-[10px] text-gray-400 mt-1">انقر لإعادة رفع أو اختيار ملف PDF آخر</p>
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-xs font-bold text-gray-700">اسحب وأفلت كتاب الـ PDF هنا أو انقر لتصفحه</p>
+                              <p className="text-[10px] text-gray-400 mt-1">يدعم تصفية وعقد فهارس الكتب بذكاء واعد (PDF فقط)</p>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </label>
+                  </div>
+
+                  {/* Extraction Error Alert */}
+                  {extractionError && (
+                    <div className="bg-amber-50/70 border border-amber-200/60 p-3 rounded-xl text-[11px] text-amber-800 text-right leading-relaxed font-bold">
+                      ⚠️ {extractionError}
                     </div>
-                    {uploadedFileName ? (
-                      <div>
-                        <p className="text-xs font-bold text-amber-600 flex items-center gap-1 justify-center">
-                          <span>{uploadedFileName}</span>
-                          <span className="text-emerald-500">✓ جاهز للتحليـل</span>
-                        </p>
-                        <p className="text-[10px] text-gray-400 mt-1">انقر لإعادة رفع أو اختيار ملف PDF آخر</p>
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="text-xs font-bold text-gray-700">اسحب وأفلت كتاب الـ PDF هنا أو انقر لتصفحه</p>
-                        <p className="text-[10px] text-gray-400 mt-1">يدعم تصفية وعقد فهارس الكتب بذكاء واعد (PDF فقط)</p>
-                      </div>
-                    )}
-                  </label>
+                  )}
+
+                  {/* Optional Text Content Paste Area */}
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-black text-gray-400 block">أو الصق هنا ملخصات أو فصولاً نصية للتحويل المباشر (اختياري):</label>
+                    <textarea 
+                      value={customText}
+                      onChange={(e) => setCustomText(e.target.value)}
+                      placeholder="امسح والصق فصوص المعرفة، أو رؤوس الأقلام، للحصول على صياغة بالغة التوافق ومحكمة البواعث..."
+                      rows={4}
+                      className="w-full rounded-2xl border-2 border-gray-100 p-4 text-xs font-sans text-right placeholder-gray-300 focus:border-amber-400 outline-hidden focus:ring-0 resize-none leading-relaxed text-gray-600"
+                    />
+                  </div>
                 </div>
 
-                {/* Optional Text Content Paste Area */}
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-black text-gray-400 block">أو الصق هنا ملخصات أو فصولاً نصية للتحويل المباشر (اختياري):</label>
-                  <textarea 
-                    value={customText}
-                    onChange={(e) => setCustomText(e.target.value)}
-                    placeholder="امسح والصق فصوص المعرفة، أو رؤوس الأقلام، للحصول على صياغة بالغة التوافق ومحكمة البواعث..."
-                    rows={4}
-                    className="w-full rounded-2xl border-2 border-gray-100 p-4 text-xs font-sans text-right placeholder-gray-300 focus:border-amber-400 outline-hidden focus:ring-0 resize-none leading-relaxed text-gray-600"
-                  />
+                {/* Execute Button */}
+                <div className="pt-2">
+                  <button
+                    onClick={handleStartAnalysis}
+                    disabled={!bookTitle.trim() && !uploadedFileName}
+                    className={`w-full py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all shadow-[0_4px_0_0_#D97706] cursor-pointer ${
+                      !bookTitle.trim() && !uploadedFileName
+                        ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed border border-gray-100'
+                        : 'bg-amber-500 hover:bg-amber-600 text-white hover:scale-[1.01]'
+                    }`}
+                  >
+                    <Sparkles className="w-5 h-5 animate-pulse text-amber-100" />
+                    <span>تفكيك الكتاب وبناء المنهج وسند الأسئلة التفاعلي بالفور</span>
+                  </button>
+                </div>
+
+              </div>
+
+              {/* Socratic Pedagogy Side Card */}
+              <div className="bg-amber-50/25 border-2 border-dashed border-amber-200/50 rounded-2xl p-5 flex flex-col justify-between" id="socrates-wisdom-corner">
+                <div className="space-y-4">
+                  <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
+                    <span className="text-xl">🎓</span>
+                  </div>
+                  <h3 className="font-extrabold text-sm text-gray-800 text-right">فلسفة سقراط في رعاية المناهج</h3>
+                  <p className="text-[11px] text-gray-500 antialiased leading-relaxed text-right">
+                    الكتب الجامعية والمدرسية الجافة تحمل كمائن ثمينة من المعارف، هدفنا هو توليد منصة تفاعلية مبهرة ومسلية تترجم تلك النصوص إلى:
+                  </p>
+                  <ul className="text-[10px] text-gray-500 space-y-2 text-right">
+                    <li className="flex items-start gap-1.5 flex-row-reverse">
+                      <span className="text-amber-500 shrink-0">✦</span>
+                      <span><strong>مستويات وفصول متعدة مخصصة</strong> تغطي كل وحدة أو قسم حقيقي في كتابك دون تقييد.</span>
+                    </li>
+                    <li className="flex items-start gap-1.5 flex-row-reverse">
+                      <span className="text-amber-500 shrink-0">✦</span>
+                      <span><strong>أسئلة ذكية متنوعة لكل فصل</strong> تفحص عقد الفهم المنهجي وترسخ الحقائق.</span>
+                    </li>
+                    <li className="flex items-start gap-1.5 flex-row-reverse">
+                      <span className="text-amber-500 shrink-0">✦</span>
+                      <span>توفير <strong>شروحات وتوجيهات</strong> لسقراط خلف كل هفوة تصحح عثار الدارس وتنمي الوعي.</span>
+                    </li>
+                  </ul>
+                </div>
+                
+                <div className="border-t border-amber-200/40 pt-4 mt-4 flex items-center justify-between flex-row-reverse text-[10px] text-gray-400">
+                  <span>توليد ديكارتي-سند معرفي</span>
+                  <span>V3.0</span>
                 </div>
               </div>
-
-              {/* Execute Button */}
-              <div className="pt-2">
-                <button
-                  onClick={handleStartAnalysis}
-                  disabled={!bookTitle.trim() && !uploadedFileName}
-                  className={`w-full py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all shadow-[0_4px_0_0_#D97706] cursor-pointer ${
-                    !bookTitle.trim() && !uploadedFileName
-                      ? 'bg-gray-200 text-gray-400 shadow-none cursor-not-allowed border border-gray-100'
-                      : 'bg-amber-500 hover:bg-amber-600 text-white hover:scale-[1.01]'
-                  }`}
-                >
-                  <Sparkles className="w-5 h-5 animate-pulse text-amber-100" />
-                  <span>تفكيك الكتاب وبناء المنهج وسند الأسئلة التفاعلي بالفور</span>
-                </button>
-              </div>
-
             </div>
 
-            {/* Socratic Pedagogy Side Card */}
-            <div className="bg-amber-50/25 border-2 border-dashed border-amber-200/50 rounded-2xl p-5 flex flex-col justify-between" id="socrates-wisdom-corner">
-              <div className="space-y-4">
-                <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
-                  <span className="text-xl">🎓</span>
+            {/* Cloud Library Bookshelf */}
+            <div className="border-t border-gray-150 pt-8" id="socrates-cloud-library">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 flex-row-reverse text-right">
+                <div>
+                  <h3 className="text-sm md:text-base font-black text-gray-800 flex items-center gap-2 justify-end">
+                    <span>رف كتبك ومناهجك السحابية</span>
+                    <Layers className="w-5 h-5 text-amber-500" />
+                  </h3>
+                  <p className="text-[11px] text-gray-400 mt-1">هنا يتم مزامنة وحفظ المناهج التعليمية المخزنة على خوادم غوغل كلاود باسمك.</p>
                 </div>
-                <h3 className="font-extrabold text-sm text-gray-800 text-right">فلسفة سقراط في رعاية المناهج</h3>
-                <p className="text-[11px] text-gray-500 antialiased leading-relaxed text-right">
-                  الكتب الجامعية والمدرسية الجافة تحمل كمائن ثمينة من المعارف، هدفنا هو توليد منصة تفاعلية مبهرة ومسلية تترجم تلك النصوص إلى:
-                </p>
-                <ul className="text-[10px] text-gray-500 space-y-2 text-right">
-                  <li className="flex items-start gap-1.5 flex-row-reverse">
-                    <span className="text-amber-500 shrink-0">✦</span>
-                    <span><strong>5 مستويات متدرجة الصعوبة</strong> تغطي أبعاد الكتاب ومحاوره بذكاء.</span>
-                  </li>
-                  <li className="flex items-start gap-1.5 flex-row-reverse">
-                    <span className="text-amber-500 shrink-0">✦</span>
-                    <span><strong>10 أسئلة مدمجة لكل مستوى</strong> (مجموع 50 سؤالاً) تفك غموض المادة.</span>
-                  </li>
-                  <li className="flex items-start gap-1.5 flex-row-reverse">
-                    <span className="text-amber-500 shrink-0">✦</span>
-                    <span>توفير <strong>شروحات وتوجيهات</strong> لسقراط خلف كل هفوة تصحح عثار الدارس وتنمي الوعي.</span>
-                  </li>
-                </ul>
+                
+                {currentUser && (
+                  <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold px-3 py-1.5 rounded-full border border-emerald-100/50">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                    <span>مزامنة قواعد البيانات مفعلة</span>
+                  </div>
+                )}
               </div>
-              
-              <div className="border-t border-amber-200/40 pt-4 mt-4 flex items-center justify-between flex-row-reverse text-[10px] text-gray-400">
-                <span>توليد ديكارتي-سند معرفي</span>
-                <span>V3.0</span>
-              </div>
+
+              {!currentUser ? (
+                <div className="bg-amber-50/15 border border-dashed border-amber-200 p-6 rounded-2xl text-center space-y-3">
+                  <span className="text-2xl block">🌐</span>
+                  <h4 className="font-extrabold text-xs md:text-sm text-amber-800">الحفظ السحابي معطل حالياً</h4>
+                  <p className="text-[10px] md:text-[11px] text-amber-950/70 leading-relaxed max-w-md mx-auto">
+                    سجل دخولك الآن عبر حسابك لتتمكن من تخزين ومعاينة المناهج المحتوية وجداول الألعاب الخاصة بك في سحابة غوغل فوراً ومن أي جهاز.
+                  </p>
+                  <button
+                    onClick={onOpenAuth}
+                    className="bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] md:text-xs py-2 px-5 rounded-xl transition-all shadow-sm shadow-amber-500/10 cursor-pointer"
+                  >
+                    تسجيل الدخول / إنشاء حساب مجاني
+                  </button>
+                </div>
+              ) : (
+                (() => {
+                  const customBooks = nodes.filter(n => n.id.startsWith('custom_'));
+                  if (customBooks.length === 0) {
+                    return (
+                      <div className="bg-gray-50/50 border-2 border-dashed border-gray-150 p-8 rounded-2xl text-center">
+                        <span className="text-2xl block mb-2">📚</span>
+                        <h4 className="font-extrabold text-xs text-gray-500">مكتبتك السحابية فارغة حالياً</h4>
+                        <p className="text-[10px] text-gray-400 mt-1 max-w-sm mx-auto">
+                          لم تقم بتحويل أي كتب بعد. بمجرد رفع كتاب PDF أو ملخص وتوليده، سيتم حفظه تلقائياً هنا في قاعدة البيانات السحابية للوصول الدائم!
+                        </p>
+                      </div>
+                    );
+                  }
+                  
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {customBooks.map((book) => (
+                        <div 
+                          key={book.id} 
+                          className="bg-white border-2 border-gray-150/80 rounded-2xl p-4 hover:border-amber-400 hover:shadow-2xs transition-all flex flex-col justify-between"
+                        >
+                          <div className="space-y-2.5">
+                            <div className="flex items-start justify-between gap-3 flex-row-reverse text-right">
+                              <span className="p-2 bg-amber-50 rounded-xl text-amber-600 border border-amber-100 shrink-0">
+                                <BookOpen className="w-4 h-4" />
+                              </span>
+                              <div className="flex-1 text-right min-w-0">
+                                <h4 className="font-extrabold text-xs text-gray-800 truncate leading-snug" title={book.title.replace('كتاب: ', '')}>
+                                  {book.title.replace('كتاب: ', '')}
+                                </h4>
+                                <span className="text-[9px] text-gray-400 font-bold block mt-0.5">{book.levelCount || 5} مستويات دراسية</span>
+                              </div>
+                            </div>
+                            
+                            <p className="text-[10px] text-gray-400 leading-relaxed text-right line-clamp-2 min-h-[30px]">
+                              {book.description || 'فصل تفاعلي أوله محكم ومنتظم.'}
+                            </p>
+                          </div>
+
+                          <div className="pt-3 border-t border-gray-100 mt-4 flex items-center justify-between flex-row-reverse gap-2">
+                            <button
+                              onClick={() => onInjectNode(book)}
+                              className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] py-1.5 px-3 rounded-xl transition-all shadow-3xs cursor-pointer flex items-center gap-1.5"
+                            >
+                              <PlayCircle className="w-3.5 h-3.5 fill-amber-100" />
+                              <span>تفعيل المنهج ومذاكرته</span>
+                            </button>
+                            
+                            <button
+                              onClick={async () => {
+                                if (confirm('هل أنت متأكد من حذف هذا المنهج المدرسي نهائياً من حسابك وقاعدة البيانات السحابية؟')) {
+                                  await onDeleteBook(book.id);
+                                }
+                              }}
+                              className="text-gray-400 hover:text-rose-500 p-1.5 rounded-xl hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-all cursor-pointer"
+                              title="حذف المنهج نهائياً"
+                            >
+                              <span className="text-xs">🗑️</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()
+              )}
             </div>
 
           </motion.div>
@@ -359,12 +606,20 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
             animate={{ opacity: 1 }}
             className="space-y-8"
           >
+            {/* Gemini API Status Banner */}
+            {infoBanner && (
+              <div className="bg-amber-50/70 border-2 border-amber-200/50 p-4 rounded-2xl text-xs font-black text-amber-900 flex items-center gap-2 flex-row-reverse text-right leading-relaxed animate-pulse">
+                <span>✨</span>
+                <span className="flex-1">{infoBanner}</span>
+              </div>
+            )}
+
             {/* Top Congratulatory Header */}
             <div className="bg-gradient-to-l from-amber-500/10 to-amber-500/0 border-r-4 border-amber-500 p-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 flex-row-reverse">
               <div className="space-y-1">
                 <h3 className="font-black text-base text-gray-800">اكتمل التوليد المنهجي بنجاح وبصيرة!</h3>
                 <p className="text-xs text-gray-500 leading-relaxed">
-                  تم تقسيم كتاب <strong className="text-amber-600">"{cleanBookTitle(bookTitle)}"</strong> بنجاح فائق إلى <strong>5 فصول فرعية</strong> و <strong>50 سؤالاً تفاعلياً</strong> صيغت بلغة ترفيهية ذكية.
+                  تم تقسيم كتاب <strong className="text-amber-600">"{cleanBookTitle(bookTitle)}"</strong> بنجاح فائق إلى <strong>٥ مستويات تفاعلية متدرجة</strong> و <strong>{generatedNode.lessons?.reduce((sum, l) => sum + (l.questions?.length || 0), 0) || 20} سؤالاً تفاعلياً</strong> صيغت بلغة ترفيهية ذكية.
                 </p>
               </div>
 
@@ -403,7 +658,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
                 animate={{ opacity: 1, y: 0 }}
                 className="bg-emerald-500 text-white p-4 rounded-xl text-center text-xs font-bold shadow-md"
               >
-                🎉 عظيم! تم حقن فصل "{cleanBookTitle(bookTitle)}" المكون من 5 مستويات و 50 سؤالاً بنجاح في شجرتك التعليمية وتحديث شلال الفضائل! اذهب للتبويب الأول (الخريطة الفلسفية) لخوض الامتحان وتلقي الأوسمة!
+                🎉 عظيم! تم حقن فصل "{cleanBookTitle(bookTitle)}" المكون من 5 مستويات و {generatedNode.lessons?.reduce((sum, l) => sum + (l.questions?.length || 0), 0) || 20} سؤالاً بنجاح في شجرتك التعليمية وتحديث شلال الفضائل! اذهب للتبويب الأول (الخريطة الفلسفية) لخوض الامتحان وتلقي الأوسمة!
               </motion.div>
             )}
 
@@ -412,7 +667,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
               
               {/* Level Tab Selectors */}
               <div className="lg:col-span-1 space-y-3">
-                <span className="text-[10px] text-gray-400 font-extrabold block mb-2 uppercase tracking-wider">مستويات الدورة المخصصة (5 مستويات)</span>
+                <span className="text-[10px] text-gray-400 font-extrabold block mb-2 uppercase tracking-wider">مستويات وفصول الدورة المخصصة ({generatedPlans.length} فصول)</span>
                 
                 {generatedPlans.map((plan, idx) => (
                   <button
@@ -431,7 +686,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
                     </span>
                     <div className="flex-1 text-right">
                       <h4 className="text-xs text-gray-800 font-black truncate">{plan.title}</h4>
-                      <p className="text-[10px] text-gray-400 mt-0.5">10 أسئلة مدمجة كاشفة</p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">{generatedNode?.lessons?.[idx]?.questions?.length || 4} أسئلة مدمجة كاشفة</p>
                     </div>
                   </button>
                 ))}
@@ -525,7 +780,7 @@ export default function TextbookConverter({ onInjectNode, alreadyInjected }: Tex
                       </div>
                     ))}
                     <div className="text-center pt-2">
-                      <p className="text-[11px] text-gray-400">تم دمج الحزمة الكاملة المكونة من 10 أسئلة تفتيشية في الدرس المباشر لخارطة اللعب للتحقق من عقد الفهم.</p>
+                      <p className="text-[11px] text-gray-400">تم دمج الحزمة الكاملة المكونة من الأسئلة التفتيشية المخصصة في الدرس المباشر لخارطة اللعب للتحقق من عقد الفهم والاستمتاع بمسيرة العلم البهية.</p>
                     </div>
                   </div>
                 </div>

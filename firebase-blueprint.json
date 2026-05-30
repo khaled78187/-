@@ -14,6 +14,7 @@
         "completedNodes": { "type": "array" },
         "weeklyActivity": { "type": "array" },
         "league": { "type": "string" },
+        "level": { "type": "integer" },
         "lastActiveDate": { "type": "string" }
       },
       "required": ["hearts", "streak", "xp", "completedLessons", "completedNodes", "weeklyActivity", "league"]

@@ -16,6 +16,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'khaledany333@gmail.com';
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -41,7 +45,9 @@ service cloud.firestore {
         && data.completedNodes is list
         && data.weeklyActivity is list
         && data.league is string
-        && data.league.size() <= 64;
+        && data.league.size() <= 64
+        && (!data.keys().hasAny(['level']) || data.level is int)
+        && (!data.keys().hasAny(['hasUsedFreeSmartPath']) || data.hasUsedFreeSmartPath is bool);
     }
 
     // Validation Blueprint for Custom uploaded educational Book
@@ -61,16 +67,16 @@ service cloud.firestore {
 
     // Match Rules
     match /users/{userId} {
-      allow read: if isSignedIn() && request.auth.uid == userId;
-      allow create: if isSignedIn() && request.auth.uid == userId && isValidUserProgress(incoming());
-      allow update: if isSignedIn() && request.auth.uid == userId && isValidUserProgress(incoming());
-      allow delete: if isSignedIn() && request.auth.uid == userId;
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && (isAdmin() || isValidUserProgress(incoming()));
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && (isAdmin() || isValidUserProgress(incoming()));
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       match /books/{bookId} {
-        allow read: if isSignedIn() && request.auth.uid == userId;
-        allow create: if isSignedIn() && request.auth.uid == userId && isValidId(bookId) && isValidCustomBook(incoming(), userId);
-        allow update: if isSignedIn() && request.auth.uid == userId && isValidId(bookId) && isValidCustomBook(incoming(), userId);
-        allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(bookId);
+        allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidId(bookId) && (isAdmin() || isValidCustomBook(incoming(), userId));
+        allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidId(bookId) && (isAdmin() || isValidCustomBook(incoming(), userId));
+        allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidId(bookId);
       }
     }
   }

@@ -81,13 +81,17 @@ export interface UserProgress {
   completedNodes: string[]; // List of node IDs completed
   weeklyActivity: DailyActivity[];
   league: string; // Bronze, Silver, Gold, Platinum, Diamond
+  level?: number; // Learning level based on XP
   lastActiveDate: string; // For streak calculation
   isPremium?: boolean;
-  subscriptionType?: 'monthly' | 'yearly';
+  hasUsedFreeSmartPath?: boolean;
+  subscriptionType?: 'monthly' | 'yearly' | 'lifetime';
   subscriptionExpiry?: string;
   dailyXpGoal?: number;
   displayName?: string;
+  email?: string;
   avatar?: string;
+  achievements?: string[];
 }
 
 export type SocratesMood = 'happy' | 'sad' | 'thinking' | 'neutral' | 'wise';

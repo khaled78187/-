@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, Crown, Flame, BookOpen, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
+import { Check, Crown, Flame, BookOpen, CreditCard, ShieldCheck, Sparkles, Send, Phone } from 'lucide-react';
 import { playSuccessSound, playClickSound } from '../utils/audio';
 
 interface SubscriptionModalProps {
@@ -17,8 +17,50 @@ export default function SubscriptionModal({ isOpen, onClose, onActivate }: Subsc
   const [cardCvv, setCardCvv] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [stripeLoading, setStripeLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const handleRealStripeCheckout = async () => {
+    playClickSound();
+    setStripeLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const response = await fetch('/api/stripe/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          planType: selectedPlan,
+          userId: localStorage.getItem('socrates_user_uid') || 'anonymous',
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.error === 'STRIPE_NOT_CONFIGURED') {
+        setErrorMessage(
+          'تنبيه: بوابة الدفع الحقيقية بحاجة لربط مفتاح Stripe السرّي (STRIPE_SECRET_KEY) في إعدادات البيئة لتعمل بشكل كامل. يمكنك المتابعة عبر التفعيل الافتراضي المجاني أدناه!'
+        );
+        setStripeLoading(false);
+        return;
+      }
+
+      if (data.url) {
+        // Redirect to safe payment gateway hosted by Stripe
+        window.location.href = data.url;
+      } else {
+        throw new Error(data.message || 'فشل الاتصال بخادم Stripe');
+      }
+    } catch (err: any) {
+      console.error('Error initiating stripe checkout:', err);
+      setErrorMessage(err.message || 'حدث خطأ غير متوقع أثناء الانتقال لبوابة الدفع.');
+      setStripeLoading(false);
+    }
+  };
 
   const handleCheckout = (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,7 +142,7 @@ export default function SubscriptionModal({ isOpen, onClose, onActivate }: Subsc
               </div>
               <h3 className="text-xl font-extrabold text-emerald-800">مبارك عليكم الانضمام لنخبة الحكماء!</h3>
               <p className="text-sm text-emerald-600 max-w-md mx-auto leading-relaxed">
-                تم تفعيل عضويتك الممتازة بنجاح مجاناً مدى الحياة. تم فتح ميزة تحليل الكتب السحابية والقلوب اللانهائية لرحلة فكرية مباركة.
+                تم تفعيل باقة اشتراك "سقراط بلس" بنجاح! تم فتح ميزة تحليل الكتب السحابية والقلوب اللانهائية لخوض رحلة فكرية وتفقه فلسفي مميز.
               </p>
               <div className="w-12 h-1 bg-emerald-500 rounded-full animate-pulse mx-auto mt-2" />
             </div>
@@ -180,89 +222,80 @@ export default function SubscriptionModal({ isOpen, onClose, onActivate }: Subsc
                 </div>
               </div>
 
-              {/* simulated Billing/Sandbox checkout */}
-              <div className="bg-gray-50/70 p-4 rounded-2xl border border-gray-150 space-y-4">
-                <div className="flex items-center gap-2 justify-start font-bold text-gray-700 text-xs">
-                  <CreditCard className="w-4 h-4 text-gray-400" />
-                  <span>بوابة الدفع الافتراضية والآمنة 💳</span>
+              {/* Direct Dev Contact section */}
+              <div className="bg-amber-50/30 p-5 rounded-2xl border-2 border-dashed border-amber-200/80 space-y-4">
+                {errorMessage && (
+                  <div className="bg-amber-50 text-amber-900 border border-amber-300 p-3 rounded-xl text-[11px] font-bold leading-relaxed text-right">
+                    ⚠️ {errorMessage}
+                  </div>
+                )}
+
+                {/* Real Payment Trigger */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 justify-start font-bold text-gray-700 text-xs shadow-2xs bg-white p-2.5 rounded-xl border border-amber-200">
+                    <Crown className="w-4 h-4 text-amber-500 fill-amber-500" />
+                    <span className="text-amber-900 font-black">للاشتراك تواصل مع المطور شخصياً 💬</span>
+                  </div>
+
+                  <p className="text-[10px] text-gray-400 leading-normal">
+                    الرجاء التواصل مع المطور لتفعيل اشتراكك الفلسفي الفردي وتجهيز حسابك لباقة "سقراط بلس" الملكية فوراً:
+                  </p>
+
+                  <div className="space-y-3 pt-1">
+                    <a
+                      href="https://t.me/Kiki40100"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => {
+                        playClickSound();
+                      }}
+                      className="flex items-center justify-between p-3 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition-all cursor-pointer text-sky-900 group"
+                    >
+                      <div className="flex items-center gap-2.5 flex-row-reverse text-right">
+                        <div className="p-1.5 bg-sky-500 text-white rounded-lg">
+                          <Send className="w-4 h-4" />
+                        </div>
+                        <div className="text-right flex-1 min-w-[120px]">
+                          <span className="block text-[10px] text-sky-705 font-black">حساب التليجرام</span>
+                          <strong className="block text-xs font-mono">@Kiki40100</strong>
+                        </div>
+                      </div>
+                      <span className="text-[10px] bg-sky-500 text-white px-2.5 py-1 rounded-full font-black group-hover:scale-105 transition-transform">مراسلتي</span>
+                    </a>
+
+                    <a
+                      href="https://wa.me/967781772478"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => {
+                        playClickSound();
+                      }}
+                      className="flex items-center justify-between p-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-all cursor-pointer text-emerald-900 group"
+                    >
+                      <div className="flex items-center gap-2.5 flex-row-reverse text-right">
+                        <div className="p-1.5 bg-emerald-500 text-white rounded-lg">
+                          <Phone className="w-4 h-4" />
+                        </div>
+                        <div className="text-right flex-1 min-w-[120px]">
+                          <span className="block text-[10px] text-emerald-705 font-black">رقم الواتساب</span>
+                          <strong className="block text-xs font-mono">781772478</strong>
+                        </div>
+                      </div>
+                      <span className="text-[10px] bg-emerald-500 text-white px-2.5 py-1 rounded-full font-black group-hover:scale-105 transition-transform font-bold">تواصل واتس</span>
+                    </a>
+                  </div>
+
+                  <button
+                    style={{ display: 'none' }}
+                    type="button"
+                    onClick={handleRealStripeCheckout}
+                    disabled={stripeLoading || isProcessing}
+                    className="w-full bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black py-3 rounded-xl text-xs transition-all shadow-md cursor-pointer disabled:opacity-55 flex items-center justify-center gap-1.5"
+                  >
+                    {stripeLoading ? 'جاري التحضير لبوابة Stripe...' : `تشغيل الدفع الحقيقي (${selectedPlan === 'monthly' ? '29 ريال / شهر' : '199 ريال / سنة'}) 👑`}
+                  </button>
                 </div>
 
-                <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 p-2.5 rounded-xl text-[10px] font-bold leading-relaxed">
-                  🎁 <strong>تجربة مجانية بالكامل:</strong> لتلبية رغبتك في توفير منصة تعليمية حرة %100، تم إعداد هذه البوابة للتدريب فقط. لا يتطلب منك دفع **أي مبالغ حقيقية**! يمكنك الضغط على "تفعيل فوري مجاني" مباشرة.
-                </div>
-
-                <form onSubmit={handleCheckout} className="space-y-3">
-                  <div>
-                    <label className="block text-[10px] text-gray-500 font-bold mb-1 mr-1">رقم بطاقة الدفع (محاكاة)</label>
-                    <input
-                      type="text"
-                      placeholder="4000 1234 5678 9010"
-                      value={cardNumber}
-                      onChange={(e) => setCardNumber(e.target.value)}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-right font-mono"
-                      dir="ltr"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-gray-500 font-bold mb-1 mr-1">رمز الأمان CVV</label>
-                      <input
-                        type="text"
-                        placeholder="123"
-                        maxLength={4}
-                        value={cardCvv}
-                        onChange={(e) => setCardCvv(e.target.value)}
-                        className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-center font-mono"
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-gray-500 font-bold mb-1 mr-1">تاريخ الانتهاء</label>
-                      <input
-                        type="text"
-                        placeholder="MM/YY"
-                        maxLength={5}
-                        value={cardExpiry}
-                        onChange={(e) => setCardExpiry(e.target.value)}
-                        className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-center font-mono"
-                        dir="ltr"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] text-gray-500 font-bold mb-1 mr-1">اسم حامل البطاقة</label>
-                    <input
-                      type="text"
-                      placeholder="خالد بن الوليد"
-                      value={cardName}
-                      onChange={(e) => setCardName(e.target.value)}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-right"
-                    />
-                  </div>
-
-                  <div className="pt-2 flex flex-col gap-2">
-                    {/* Safe Simulate payment Button */}
-                    <button
-                      type="submit"
-                      disabled={isProcessing}
-                      className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-black py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer disabled:opacity-55"
-                    >
-                      {isProcessing ? 'جاري التحقق الافتراضي الدائري...' : `دفع افتراضي محاكي (${selectedPlan === 'monthly' ? '29 ريال' : '199 ريال'})`}
-                    </button>
-
-                    {/* Instant Free Activation (Zero Riyals Required) */}
-                    <button
-                      type="button"
-                      onClick={instantSandboxActivate}
-                      disabled={isProcessing}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer border-r-4 border-emerald-400 flex items-center justify-center gap-1"
-                    >
-                      🚀 تفعيل فوري مجاني %100 بدون ريالات!
-                    </button>
-                  </div>
-                </form>
               </div>
 
             </div>

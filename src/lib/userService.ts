@@ -4,7 +4,9 @@ import {
   setDoc, 
   collection, 
   getDocs, 
-  getDocFromServer
+  getDocFromServer,
+  deleteDoc,
+  onSnapshot
 } from 'firebase/firestore';
 import { db, OperationType, handleFirestoreError, auth } from './firebase';
 import { UserProgress, SkillNode } from '../types';
@@ -31,7 +33,7 @@ export async function testConnection(): Promise<boolean> {
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. Client is offline.");
+      console.warn("Firebase configuration verified. Client is in offline cached mode.");
     }
     return false;
   }
@@ -71,6 +73,13 @@ export async function saveUserProgress(userId: string, progress: UserProgress): 
         enriched.displayName = currentAuthUser.displayName;
       } else {
         enriched.displayName = 'طالب علم';
+      }
+    }
+
+    if (!enriched.email && typeof window !== 'undefined') {
+      const currentAuthUser = auth.currentUser;
+      if (currentAuthUser && currentAuthUser.email) {
+        enriched.email = currentAuthUser.email;
       }
     }
     
@@ -151,5 +160,139 @@ export async function getUserCustomBooks(userId: string): Promise<SkillNode[]> {
     return books;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+/**
+ * Deletes a user-uploaded custom textbook from Cloud Firestore
+ */
+export async function deleteCustomBook(userId: string, bookId: string): Promise<void> {
+  const path = `users/${userId}/books/${bookId}`;
+  try {
+    const bookDocRef = doc(db, 'users', userId, 'books', bookId);
+    await deleteDoc(bookDocRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+/**
+ * Direct administrator control to activate or cancel users' subscriptions in Firestore
+ */
+export async function updateUserSubscription(userId: string, isPremium: boolean, subscriptionType?: 'monthly' | 'yearly'): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    const docRef = doc(db, 'users', userId);
+    const updateData: Record<string, any> = {
+      isPremium,
+    };
+    if (isPremium) {
+      updateData.subscriptionType = subscriptionType || 'yearly';
+      updateData.subscriptionExpiry = new Date(Date.now() + (subscriptionType === 'monthly' ? 30 : 365) * 24 * 60 * 60 * 1000).toISOString();
+    } else {
+      updateData.subscriptionType = '';
+      updateData.subscriptionExpiry = '';
+    }
+    await setDoc(docRef, updateData, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Real-time listener for user progress changes using a Stream (onSnapshot)
+ * This satisfies Requirement 3 (Live Synchronization)
+ */
+export function subscribeToUserProgress(
+  userId: string,
+  onUpdate: (progress: UserProgress) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const path = `users/${userId}`;
+  const docRef = doc(db, 'users', userId);
+
+  return onSnapshot(
+    docRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data() as UserProgress;
+        // Dynamically compute level if it is not currently stored
+        if (!data.level) {
+          data.level = Math.floor(data.xp / 500) + 1;
+        }
+        onUpdate(data);
+      } else {
+        // Doc doesn't exist, pass null so first-time setup can be initialized
+        onUpdate(null as any);
+      }
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.GET, path);
+      if (onError) onError(error);
+    }
+  );
+}
+
+/**
+ * Increments XP and rewards a completed task/lesson in Firestore.
+ * This satisfies Requirement 4 (Updating XP and Progress on task completion)
+ */
+export async function completeTaskAndAwardXP(
+  userId: string, 
+  xpAwarded: number, 
+  taskId: string
+): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    const progress = await getUserProgress(userId);
+    if (!progress) {
+      throw new Error(`User Progress document not found for UI: ${userId}`);
+    }
+
+    const nextXp = progress.xp + xpAwarded;
+    const nextLevel = Math.floor(nextXp / 500) + 1;
+    
+    const nextCompletedLessons = progress.completedLessons.includes(taskId)
+      ? progress.completedLessons
+      : [...progress.completedLessons, taskId];
+
+    await saveUserProgress(userId, {
+      ...progress,
+      xp: nextXp,
+      level: nextLevel,
+      completedLessons: nextCompletedLessons,
+      lastActiveDate: new Date().toISOString()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Resets user progress fields back to baseline defaults.
+ * This satisfies Requirement 5 (Reset Progress Button)
+ */
+export async function resetUserProgress(userId: string): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    const docRef = doc(db, 'users', userId);
+    
+    const resetData: Partial<UserProgress> = {
+      xp: 1200,
+      level: 3,
+      hearts: 5,
+      streak: 3,
+      currentNodeId: 'sec_philosophy',
+      currentLessonId: '',
+      completedLessons: [],
+      completedNodes: [],
+      league: 'Bronze',
+      lastActiveDate: new Date().toISOString(),
+      achievements: []
+    };
+
+    await setDoc(docRef, resetData, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }

@@ -1,16 +1,13 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
   signInWithPopup, 
-  GoogleAuthProvider, 
-  updateProfile,
-  signOut
+  GoogleAuthProvider 
 } from 'firebase/auth';
-import { Mail, Lock, User, LogIn, Sparkles, AlertCircle, X, ShieldCheck } from 'lucide-react';
+import { AlertCircle, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
-import { playClickSound } from '../utils/audio';
+import { playClickSound, playSuccessSound } from '../utils/audio';
+import socratesAppIcon from '../assets/images/socrates_app_icon_1779976695367.png';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -18,12 +15,7 @@ interface AuthModalProps {
 }
 
 export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -32,14 +24,13 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
     playClickSound();
     setIsLoading(true);
     setError(null);
-    setErrorCode(null);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
+      playSuccessSound();
       onClose();
     } catch (err: any) {
       console.error(err);
-      setErrorCode(err.code || null);
       if (err.code === 'auth/popup-closed-by-user') {
         setError('تم إغلاق نافذة تسجيل الدخول من قبل المستخدم.');
       } else if (err.code === 'auth/operation-not-allowed') {
@@ -52,55 +43,13 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    playClickSound();
-    setIsLoading(true);
-    setError(null);
-    setErrorCode(null);
-
-    if (isSignUp && !fullName.trim()) {
-      setError('يرجى إدخال اسمك الكريم أولاً.');
-      setIsLoading(false);
-      return;
-    }
-
-    try {
-      if (isSignUp) {
-        const userCred = await createUserWithEmailAndPassword(auth, email, password);
-        await updateProfile(userCred.user, {
-          displayName: fullName
-        });
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
-      onClose();
-    } catch (err: any) {
-      console.error(err);
-      setErrorCode(err.code || null);
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        setError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
-      } else if (err.code === 'auth/email-already-in-use') {
-        setError('هذا البريد الإلكتروني مسجل بالفعل.');
-      } else if (err.code === 'auth/weak-password') {
-        setError('كلمة المرور يجب أن لا تقل عن 6 أحرف.');
-      } else if (err.code === 'auth/operation-not-allowed') {
-        setError('طريقة تسجيل الدخول بالبريد الإلكتروني والرمز السري (Email/Password) غير مفعّلة في مشروع الـ Firebase الخاص بك.');
-      } else {
-        setError('حدث خرق فني أثناء المصادقة. يرجى مراجعة التفاصيل والمحاولة مجدداً.');
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-md" dir="rtl">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="bg-white rounded-3xl border-2 border-amber-100/50 shadow-2xl w-full max-w-md overflow-hidden relative font-sans text-right flex flex-col"
+        className="bg-white rounded-3xl border-2 border-amber-100/50 shadow-2xl w-full max-w-sm overflow-hidden relative font-sans text-right flex flex-col"
       >
         {/* Decorative Top Amber Accent Line */}
         <div className="h-2 bg-gradient-to-l from-amber-500 to-orange-500 w-full" />
@@ -119,160 +68,60 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
         <div className="p-6 md:p-8 space-y-6">
           {/* Header Visual */}
           <div className="text-center space-y-2">
-            <div className="inline-flex p-3 bg-amber-500 text-white rounded-2xl shadow-md mx-auto mb-2">
-              <ShieldCheck className="w-6 h-6" />
+            <div className="inline-flex w-16 h-16 bg-amber-50 rounded-3xl overflow-hidden border-2 border-amber-400 shadow-md mx-auto mb-2 flex items-center justify-center transition-transform hover:scale-105 duration-300">
+              <img src={socratesAppIcon} alt="سقراط الحكيم" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             </div>
-            <h3 className="font-extrabold text-xl text-gray-900 leading-tight">
-              {isSignUp ? 'إنشاء حساب طالب حكيم' : 'موانئ تسجيل الدخول لسقراط'}
+            <h3 className="font-extrabold text-base text-gray-900 leading-tight">
+              تسجيل الدخول الآمن لسقراط 🏛️
             </h3>
             <p className="text-xs text-gray-400">
-              {isSignUp ? 'تفقه بعلوم الفكر بمسار سحابي آمن ومستمر لحفظ إنجازاتك' : 'عد لرحلتك المعرفية وزد من رصيد نقاطك ومراكز الصدارة مدمجاً بـ Cloud'}
+              احفظ تقدمك الفلسفي وموقع شجرة المعرفة مباشرةً على خوادم السحاب لمزاولتها من أي جهاز!
             </p>
           </div>
 
-          {/* Reassurance Badge: 100% Free Forever */}
-          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/60 p-3.5 rounded-2xl flex items-start gap-3 flex-row-reverse text-right">
-            <div className="text-xl shrink-0">🎁</div>
+          {/* Premium Info Badge instead of Free claim */}
+          <div className="bg-gradient-to-r from-amber-50/40 to-orange-50/30 border border-amber-200 p-3.5 rounded-2xl flex items-start gap-2.5 flex-row-reverse text-right">
+            <div className="text-lg shrink-0">👑</div>
             <div className="space-y-0.5">
-              <h4 className="font-extrabold text-xs text-emerald-800">عضوية مجانية بالكامل %100 مدى الحياة!</h4>
-              <p className="text-[10px] text-emerald-600 leading-relaxed">
-                التسجيل لا يتطلب منك دفع **أي ريال** أو إدخال أي بطاقة بنكية. استمتع بكامل ميزات المنصة والتعلم الفلسفي مجاناً دون أي قيود مالية إطلاقاً.
+              <h4 className="font-extrabold text-[11px] text-amber-800">العضوية الممتازة بسقراط بلس</h4>
+              <p className="text-[10px] text-amber-600 leading-normal">
+                برنامج سقراط الفلسفي يتضمن باقة اشتراك مدفوعة ومميزة، حيث يتيح لك فتح سائر الأبواب الفكرية والقلوب اللانهائية وصانع الكتب المخصص.
               </p>
             </div>
           </div>
 
-          {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {isSignUp && (
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-500 block">الاسم الكريم</label>
-                <div className="relative">
-                  <User className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-4.5 h-4.5" />
-                  <input 
-                    type="text" 
-                    placeholder="مثل: عبد الرحمن الجزيري"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    required
-                    className="w-full pr-11 pl-4 py-3 rounded-xl border-2 border-gray-100 focus:border-amber-500 focus:outline-none transition-all text-xs text-right font-medium"
-                  />
-                </div>
-              </div>
+          {/* Error Message */}
+          <AnimatePresence>
+            {error && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3.5 rounded-xl flex items-start gap-2 relative overflow-hidden text-right"
+              >
+                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </motion.div>
             )}
-
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-gray-500 block">البريد الإلكتروني</label>
-              <div className="relative">
-                <Mail className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-4.5 h-4.5" />
-                <input 
-                  type="email" 
-                  placeholder="name@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="w-full pr-11 pl-4 py-3 rounded-xl border-2 border-gray-100 focus:border-amber-500 focus:outline-none transition-all text-xs text-right font-medium"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-gray-500 block">كلمة المرور</label>
-              <div className="relative">
-                <Lock className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-4.5 h-4.5" />
-                <input 
-                  type="password" 
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="w-full pr-11 pl-4 py-3 rounded-xl border-2 border-gray-100 focus:border-amber-500 focus:outline-none transition-all text-xs text-right font-medium"
-                />
-              </div>
-            </div>
-
-            {/* Error Message */}
-            <AnimatePresence>
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3.5 rounded-xl flex flex-col gap-2 relative overflow-hidden text-right"
-                >
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                    <span>{error}</span>
-                  </div>
-                  {errorCode === 'auth/operation-not-allowed' && (
-                    <div className="mt-2 p-3 bg-white border border-rose-100/50 rounded-lg text-gray-700 space-y-2.5">
-                      <p className="font-extrabold text-[10px] text-gray-500 uppercase tracking-wider">خطوات التفعيل في دقيقة واحدة:</p>
-                      <ol className="list-decimal list-inside text-[11px] leading-relaxed text-gray-600 font-medium space-y-1.5 pr-1">
-                        <li>افتح <a href="https://console.firebase.google.com/project/tough-terminus-ckm1r/authentication/providers" target="_blank" rel="noopener noreferrer" className="text-amber-600 font-extrabold underline hover:text-amber-700">هذا الرابط المباشر ↗</a> لمشروعك.</li>
-                        <li>انقر على زر <strong className="text-gray-950 bg-gray-50 px-1 py-0.5 rounded border border-gray-200">Add new provider</strong>.</li>
-                        <li>اختر <strong className="text-gray-950 bg-gray-50 px-1 py-0.5 rounded border border-gray-200">Email/Password</strong> وقم بتفعيله (Enable).</li>
-                        <li>احفظ التغييرات وعد إلى هنا لإتمام التسجيل بنجاح!</li>
-                      </ol>
-                      
-                      <a 
-                        href="https://console.firebase.google.com/project/tough-terminus-ckm1r/authentication/providers"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 hover:scale-[1.01] active:scale-[0.99] transition-all text-white font-black rounded-xl text-xs shadow-xs cursor-pointer border-none mt-1"
-                      >
-                        فتح لوحة تحكم Firebase Auth ↗
-                      </a>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:scale-[1.01] active:scale-[0.99] transition-all text-white font-black py-3.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-md shadow-amber-500/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span>{isSignUp ? 'إنشاء الحساب والبدء' : 'تسجيل الدخول'}</span>
-              <LogIn className="w-4 h-4" />
-            </button>
-          </form>
-
-          {/* Divider */}
-          <div className="relative flex py-1 items-center">
-            <div className="flex-grow border-t border-gray-100"></div>
-            <span className="flex-shrink mx-4 text-gray-400 text-[10px] font-bold">أو أكمل بلمسة واحدة</span>
-            <div className="flex-grow border-t border-gray-100"></div>
-          </div>
+          </AnimatePresence>
 
           {/* Google Button */}
           <button
             onClick={handleGoogleSignIn}
             disabled={isLoading}
-            className="w-full bg-white border-2 border-gray-150 hover:bg-gray-50 active:scale-[0.98] transition-all text-gray-700 font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            className="w-full bg-slate-900 hover:bg-slate-950 hover:scale-[1.01] active:scale-[0.99] transition-all text-white font-black py-3.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
               <path
-                fill="#EA4335"
+                fill="#FFFFFF"
                 d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.114-5.136 4.114-3.567 0-6.46-2.893-6.46-6.46s2.893-6.46 6.46-6.46c1.624 0 3.1.6 4.243 1.586l3.078-3.078C19.124 2.112 15.86 1 12.24 1c-6.075 0-11 4.925-11 11s4.925 11 11 11c5.783 0 10.613-4.173 11-9.715H12.24z"
               />
             </svg>
-            <span>متابعة باستخدام حساب Google</span>
+            <span>{isLoading ? 'جاري الاتصال بالسحاب...' : 'متابعة باستخدام حساب Google'}</span>
           </button>
 
-          {/* Toggle Tab Footer */}
-          <p className="text-center text-xs text-gray-400 font-medium">
-            {isSignUp ? 'هل لديك حساب بالفعل؟' : 'ليس لديك عضوية بعد؟'}{' '}
-            <button
-              onClick={() => {
-                playClickSound();
-                setIsSignUp(!isSignUp);
-                setError(null);
-              }}
-              type="button"
-              className="text-amber-600 hover:text-amber-700 font-extrabold cursor-pointer border-b border-dashed border-amber-600/40 hover:border-amber-700/60 pb-0.5"
-            >
-              {isSignUp ? 'سجل دخولك الآن' : 'قم بإنشاء حساب تفاعلي'}
-            </button>
+          <p className="text-center text-[10px] text-gray-400 font-medium">
+            تأمين الحسابات مدمج ببروتوكولات المصادقة الرسمية لشركة Google.
           </p>
         </div>
       </motion.div>

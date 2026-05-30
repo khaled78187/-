@@ -211,11 +211,34 @@ export default function LessonModal({ lesson, onClose, onFinishLesson, isPremium
       playCorrectSound();
       setXpEarned(prev => prev + 5);
       setMascotMood('happy');
+
+      // Track consecutive correct answers
+      try {
+        const curStreak = parseInt(localStorage.getItem('socrates_consecutive_correct') || '0', 10);
+        const nextStreak = curStreak + 1;
+        localStorage.setItem('socrates_consecutive_correct', String(nextStreak));
+
+        const bestStreak = parseInt(localStorage.getItem('socrates_best_consecutive_correct') || '0', 10);
+        if (nextStreak > bestStreak) {
+          localStorage.setItem('socrates_best_consecutive_correct', String(nextStreak));
+        }
+      } catch (err) {
+        console.error("Error updating consecutive correct answers streak:", err);
+      }
+
       const happyDialogue = currentQ.explanation || 'بوركت خطاك! العقل الممتد وراء الفلسفة والحقيقة يرى النور تلقائياً!';
       setBubbleText(happyDialogue);
       triggerVoice(happyDialogue);
     } else {
       setShouldShake(true);
+
+      // Reset consecutive correct answers
+      try {
+        localStorage.setItem('socrates_consecutive_correct', '0');
+      } catch (err) {
+        console.error("Error resetting consecutive correct answers streak:", err);
+      }
+
       const nextHearts = isPremium ? hearts : hearts - 1;
       if (!isPremium) {
         setHearts(nextHearts);
